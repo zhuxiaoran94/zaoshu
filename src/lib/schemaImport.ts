@@ -92,11 +92,11 @@ function fromTypeScript(raw:string):ImportPreview {
   return{source:'typescript',warnings,project:{id:`project_${Date.now()}`,name:'TypeScript 类型 Mock 数据',templateId:'imported-typescript',description:'从 TypeScript interface/type 本地静态解析生成',seed:20250814,mode:'random',version:'1.0',tables}}
 }
 
-export function importSchemaText(raw:string):ImportPreview {
+export async function importSchemaText(raw:string):Promise<ImportPreview> {
   if(new Blob([raw]).size>MAX_CONFIG_BYTES)throw new Error('Schema 文件不能超过 1 MB')
   if(/\bCREATE\s+TABLE\b/i.test(raw))return fromSql(raw)
   if(/\binterface\s+[A-Za-z_$][\w$]*(?:\s+extends\s+[^\{]+)?\s*\{|\btype\s+[A-Za-z_$][\w$]*\s*=\s*\{/.test(raw))return fromTypeScript(raw)
-  let value:unknown;try{value=JSON.parse(raw)}catch{throw new Error('当前支持 OpenAPI/普通 JSON、SQL CREATE TABLE 或 TypeScript interface/type；请先将 YAML 转为 JSON')}
+  let value:unknown;try{value=JSON.parse(raw)}catch{try{const{parseDocument}=await import('yaml'),document=parseDocument(raw,{prettyErrors:true,strict:true,uniqueKeys:true});const problems=[...document.errors,...document.warnings];if(problems.length)throw new Error(problems[0].message);value=document.toJS({maxAliasCount:100})}catch(reason){throw new Error(`无法解析 JSON/YAML：${reason instanceof Error?reason.message:'格式错误'}`)}}
   if(value&&typeof value==='object'&&!Array.isArray(value)&&typeof (value as Record<string,unknown>).openapi==='string')return fromOpenApi(value as Record<string,unknown>)
   return fromJson(value)
 }

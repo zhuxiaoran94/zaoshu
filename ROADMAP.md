@@ -30,6 +30,7 @@
 - [x] TypeScript interface/type 静态推断与类型引用建模
 - [x] 字段筛选多选、批量规则配置与安全批量删除
 - [x] 最近 10 次生成历史、质量摘要与一键复现
+- [x] OpenAPI 3 YAML 与普通 YAML 样例安全导入
 
 ## 近期版本
 
@@ -41,7 +42,8 @@
 
 ## 后续探索
 
-- [ ] OpenAPI 3.x YAML 与本地 `$ref` 解析
+- [x] OpenAPI 3.x YAML 解析
+- [ ] OpenAPI 本地文件 `$ref` 解析
 - [x] TypeScript 类型推断
 - [ ] Web Streams 真正流式导出百万级数据
 - [ ] 可选的只读分享链接（不包含真实数据）
