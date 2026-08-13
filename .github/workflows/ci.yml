@@ -37,6 +37,9 @@ jobs:
       - name: Run unit tests
         run: npm test
 
+      - name: Smoke test CLI with a reproducible plan
+        run: npm run --silent mock -- --template testing --seed 42 --count 2 --dry-run --json
+
       - name: Build and verify Cloudflare artifact
         run: npm run build
 

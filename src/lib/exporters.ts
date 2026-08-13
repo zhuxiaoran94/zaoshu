@@ -5,7 +5,7 @@ const download=(blob:Blob,name:string)=>{const url=URL.createObjectURL(blob);con
 const rowsFor=(data:GeneratedData,tableId:string)=>data[tableId]||[]
 const clean=(row:DataRow)=>Object.fromEntries(Object.entries(row).filter(([k])=>k!=='_mock_meta'))
 const encoder=new TextEncoder()
-export const GENERATOR_VERSION='3.5.0'
+export const GENERATOR_VERSION='3.6.0'
 export const neutralizeSpreadsheetFormula = (value:string) => /^[=+\-@\t\r]/.test(value) ? `'${value}` : value
 const csvCell=(v:unknown,delimiter=',')=>{const raw=v==null?'':typeof v==='object'?JSON.stringify(v):String(v);const s=neutralizeSpreadsheetFormula(raw);return s.includes(delimiter)||/["\n]/.test(s)?`"${s.replaceAll('"','""')}"`:s}
 export function toCSV(rows:DataRow[],delimiter=','){if(!rows.length)return '';const keys=[...new Set(rows.flatMap(r=>Object.keys(clean(r))))];return [keys.join(delimiter),...rows.map(r=>keys.map(k=>csvCell(r[k],delimiter)).join(delimiter))].join('\n')}

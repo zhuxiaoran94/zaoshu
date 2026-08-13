@@ -2,7 +2,7 @@
 
 面向测试人员的浏览器端测试数据工作台。内置 120+ 字段生成类型和用户、电商、金融、游戏、社区、物流、测试通用七类场景，无需上传任何数据即可生成多表关联测试数据。
 
-当前版本：**3.5.0 公共安全版**。网站没有匿名写入接口，访客的数据与配置仅保存在各自浏览器中。
+当前版本：**3.6.0 CLI 自动化版**。网站没有匿名写入接口，访客的数据与配置仅保存在各自浏览器中。
 
 ## 功能
 
@@ -89,6 +89,8 @@
 - GitHub Actions 对每次 push/PR 运行锁定依赖安装、全部测试、生产构建、Cloudflare/PWA 产物与首屏体积检查
 - CI 和 Dependabot 阻断新增高危生产依赖漏洞，CODEOWNERS、PR 模板和贡献规则要求维护者审查公开改动
 - Excel 多表导出由受控 Office Open XML 写入器完成，只生成工作簿、不解析输入文件，并保留公式注入防护
+- CLI 可直接使用七套内置模板或网页导出的 `.mock.json`，覆盖种子、模式、每表数量和 18 种导出格式
+- CLI 支持 dry-run、机器 JSON 摘要、质量失败退出码和安全拒绝覆盖，适合 CI 测试准备与产物留档
 
 完整版本记录见 [CHANGELOG.md](./CHANGELOG.md)，已实现与待实现功能见 [ROADMAP.md](./ROADMAP.md)。
 
@@ -105,6 +107,33 @@ npm run dev
 npm test
 npm run build
 ```
+
+## CLI / CI 使用
+
+无需准备数据或配置，直接用内置电商模板生成完整交付包：
+
+```bash
+npm run mock -- --template commerce --seed 42 --format bundle --output artifacts/commerce.zip
+```
+
+先校验计划，不生成或写入文件：
+
+```bash
+npm run --silent mock -- --template testing --count 100 --dry-run --json
+```
+
+复用网页“下载配置”得到的 Schema，并输出机器摘要；存在非预期质量失败时让 CI 失败：
+
+```bash
+npm run mock -- \
+  --config project.mock.json \
+  --format xlsx \
+  --output artifacts/mock.zip \
+  --summary artifacts/mock-summary.json \
+  --fail-on-quality
+```
+
+运行 `npm run mock -- --help` 查看所有模式与格式，`--list-templates` 查看七套内置模板。CLI 默认不联网、不执行输入代码、不覆盖已有文件；只有明确传入 `--force` 才允许覆盖指定输出。
 
 ## Cloudflare Pages
 
