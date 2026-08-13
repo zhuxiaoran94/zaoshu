@@ -23,7 +23,7 @@ describe('Mock造数引擎',()=>{
     expect(data.order_items.every(r=>orderIds.has(r.orderId))).toBe(true)
   })
   it('外键支持均匀、热点和严格一对一策略并保持可复现',()=>{
-    const project=cloneTemplate('commerce'),users=project.tables.find(table=>table.id==='users')!,orders=project.tables.find(table=>table.id==='orders')!,userId=orders.fields.find(field=>field.name==='userId')!;orders.countByReference=undefined
+    const project=cloneTemplate('commerce'),users=project.tables.find(table=>table.id==='users')!,orders=project.tables.find(table=>table.id==='orders')!,userId=orders.fields.find(field=>field.name==='userId')!;orders.countByReference=undefined;project.tables.find(table=>table.id==='order_items')!.countByReference=undefined
     users.count=5;orders.count=12;project.tables.filter(table=>!['users','orders'].includes(table.id)).forEach(table=>table.count=1)
     userId.ref={tableId:'users',field:'id',strategy:'roundRobin'}
     let first=generateProject(project).data,counts=users.count?first.users.map(parent=>first.orders.filter(row=>row.userId===parent.id).length):[]

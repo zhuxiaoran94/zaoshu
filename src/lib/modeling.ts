@@ -3,6 +3,7 @@ import { analyzeCoverage, coveragePercentage } from './coverage'
 import { ENUM_VALUES } from '../data/enumValues'
 import { analyzeReferenceDistribution, referenceStrategy } from './reference'
 import { plannedProjectCounts } from './cardinality'
+import { calculateRelationValues } from './relationValues'
 
 const issueRows=(indexes:number[])=>({rowIndexes:indexes.slice(0,200),issueCount:indexes.length})
 const expectedStatus=(project:ProjectSchema,invalid:number):QualityCheck['status']=>invalid===0?'pass':project.mode==='boundary'||project.mode==='exception'?'expected':'fail'
@@ -38,6 +39,7 @@ export function validate(project:ProjectSchema,data:GeneratedData):QualityCheck[
       if(field.min!==undefined||field.max!==undefined) { const invalidRows=rows.map((row,index)=>({value:row[field.name],index})).filter(item=>typeof item.value==='number'&&((field.min!==undefined&&item.value<field.min)||(field.max!==undefined&&item.value>field.max))).map(item=>item.index); checks.push({id:`range-${field.id}`,label:`${table.label}.${field.label} 范围`,status:expectedStatus(project,invalidRows.length),detail:invalidRows.length?`${invalidRows.length} 条数据越界`:'全部位于配置范围内',tableId:table.id,fieldId:field.id,...issueRows(invalidRows)}) }
       if(field.length!==undefined){const invalidRows=rows.map((row,index)=>({value:row[field.name],index})).filter(item=>typeof item.value==='string'&&item.value.length>field.length!).map(item=>item.index);checks.push({id:`length-${field.id}`,label:`${table.label}.${field.label} 长度`,status:expectedStatus(project,invalidRows.length),detail:invalidRows.length?`${invalidRows.length} 条文本超过 ${field.length} 字符`:`文本均不超过 ${field.length} 字符`,tableId:table.id,fieldId:field.id,...issueRows(invalidRows)})}
       const candidates=field.values?.length?field.values:ENUM_VALUES[field.generator];if(candidates?.length&&!field.prefix&&!field.suffix){const allowed=new Set(candidates.map(value=>enumKey(value,field.dataType))),invalidRows=rows.map((row,index)=>({value:row[field.name],index})).filter(item=>item.value!==undefined&&item.value!==null&&!allowed.has(enumKey(item.value,field.dataType))).map(item=>item.index);checks.push({id:`enum-${field.id}`,label:`${table.label}.${field.label} 枚举`,status:expectedStatus(project,invalidRows.length),detail:invalidRows.length?`${invalidRows.length} 条记录不在候选值中`:`全部属于 ${candidates.length} 个候选值`,tableId:table.id,fieldId:field.id,...issueRows(invalidRows)})}
+      if(field.relationValue){let expected:unknown[]=[];try{expected=calculateRelationValues(project,table.id,field,rows,data)}catch{expected=[]}const invalidRows=rows.map((row,index)=>({row,index})).filter(({row,index})=>!expected.length||enumKey(row[field.name],field.dataType)!==enumKey(expected[index],field.dataType)).map(item=>item.index);checks.push({id:`relation-value-${field.id}`,label:`${table.label}.${field.label} 跨表一致性`,status:expectedStatus(project,invalidRows.length),detail:invalidRows.length?`${invalidRows.length} 条与跨表计算结果不一致`:'全部与关联数据一致',tableId:table.id,fieldId:field.id,...issueRows(invalidRows)})}
     }
   }
   const abnormal=Object.values(data).flat().filter(r=>r._mock_meta).length

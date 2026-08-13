@@ -264,6 +264,13 @@
 .reference-strategy-note { margin-top: 2px; padding: 9px; border-radius: 7px; background: #edf6f5; color: var(--muted); }
 .reference-strategy-note > strong { display: block; font-size: 9px; line-height: 1.55; }
 .reference-strategy-note > label { margin-top: 8px; }
+.relation-value-empty { display: flex; align-items: center; gap: 6px; }
+.relation-value-empty > div { display: flex; flex: 1; flex-direction: column; }
+.relation-value-empty strong,.relation-value-editor header strong { color: var(--ink); font-size: 10px; }
+.relation-value-empty span { margin-top: 3px; color: var(--muted); font-size: 9px; line-height: 1.5; }
+.relation-value-empty .button { height: 30px; padding: 0 9px; font-size: 9px; white-space: nowrap; }
+.relation-value-editor header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.relation-value-editor header button { border: 0; background: transparent; color: var(--orange); font-size: 9px; }
 .cardinality-toolbar { display: flex; min-height: 40px; flex: none; align-items: center; gap: 10px; padding: 5px 14px; border-bottom: 1px solid var(--line); background: #e8f2f3; }
 .cardinality-toolbar label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 9px; }
 .cardinality-toolbar label:first-child span { color: var(--ink); font-weight: 700; }

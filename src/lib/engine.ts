@@ -5,6 +5,7 @@ import { analyzeCoverage, coveragePercentage } from './coverage'
 import { evaluateFormula, orderFormulaFields } from './formula'
 import { selectReferenceValue } from './reference'
 import { planTableCardinality } from './cardinality'
+import { applyRelationValues } from './relationValues'
 export { refreshGeneratedResult, sortTables, validate } from './modeling'
 
 function hash(value:string) { let h=2166136261; for(const c of value) { h ^= c.charCodeAt(0); h=Math.imul(h,16777619) } return h>>>0 }
@@ -96,6 +97,7 @@ export function generateProject(project:ProjectSchema,pools:Record<string,string
     }
     data[table.id]=rows
   }
+  applyRelationValues(project,data)
   const checks=validate(project,data)
   const all=Object.values(data).flat(); const abnormal=all.filter(r=>r._mock_meta).length
   const distributionFields=project.tables.flatMap(t=>t.fields).filter(f=>f.distribution||f.weights?.length)
@@ -136,6 +138,7 @@ export function supplementCoverageGaps(project:ProjectSchema,data:GeneratedData,
     }
     nextData[table.id]=rows;addedByTable[table.id]=needed
   }
+  applyRelationValues(project,nextData)
   const nextProject={...project,tables:project.tables.map(table=>addedByTable[table.id]?{...table,count:(nextData[table.id]||[]).length}:table)}
   return{project:nextProject,data:nextData,added:Object.values(addedByTable).reduce((sum,count)=>sum+count,0)}
 }

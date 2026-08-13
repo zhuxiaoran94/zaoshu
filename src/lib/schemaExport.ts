@@ -23,6 +23,7 @@ export function fieldJsonSchema(field:FieldRule){
   if(field.generator)schema['x-mock-generator']=field.generator
   if(field.formula)schema['x-mock-formula']=field.formula
   if(field.condition)schema['x-mock-condition']=field.condition
+  if(field.relationValue)schema['x-mock-relation-value']=field.relationValue
   return schema
 }
 
@@ -44,7 +45,23 @@ const typeName=(value:string)=>value.split(/[^A-Za-z0-9]+/).filter(Boolean).map(
 const tsType=(field:FieldRule)=>{const values=normalizedEnum(field);let base=values?.length&&values.length<=50?values.map(value=>JSON.stringify(value)).join(' | '):field.dataType==='number'?'number':field.dataType==='boolean'?'boolean':field.dataType==='object'?'Record<string, unknown>':'string';if(field.nullable||field.condition?.otherwise==='null')base+=` | null`;return base}
 export function toTypeScript(project:ProjectSchema){return`${project.tables.map(table=>`/** ${table.label} · 默认 ${table.count} 条 */\nexport interface ${typeName(table.name)} {\n${table.fields.map(field=>`  /** ${field.label}${field.ref?` · FK → ${field.ref.tableId}.${field.ref.field}`:''} */\n  ${field.name}${(field.missing??0)>0||field.condition?.otherwise==='omit'?'?':''}: ${tsType(field)};`).join('\n')}\n}`).join('\n\n')}\n`}
 
-export function relationMarkdown(project:ProjectSchema){const labels={random:'种子随机',roundRobin:'轮询均匀',hotspot:'热点 80/20',oneToOne:'严格一对一'},relations=project.tables.flatMap(table=>table.fields.filter(field=>field.ref).map(field=>{const target=project.tables.find(candidate=>candidate.id===field.ref!.tableId),strategy=field.ref!.strategy??'random',cardinality=table.countByReference?.fieldId===field.id?table.countByReference:null;return`- \`${table.name}.${field.name}\` → \`${target?.name??field.ref!.tableId}.${field.ref!.field}\`（${cardinality?`每个父记录 ${cardinality.min}–${cardinality.max} 条`:`${labels[strategy]}${strategy==='hotspot'?`，热点池 ${field.ref!.hotspotPercent??20}%`:''}`}）`}));return`# ${project.name} Schema 关系说明\n\n- Schema 版本：${project.version}\n- 随机种子：${project.seed}\n- 造数模式：${project.mode}\n- 数据表：${project.tables.length}\n- 字段：${project.tables.reduce((sum,table)=>sum+table.fields.length,0)}\n\n## 数据表\n\n${sortTables(project.tables).map((table,index)=>`${index+1}. **${table.label}**（\`${table.name}\`）：${table.fields.length} 字段，${table.countByReference?`按父记录生成 ${table.countByReference.min}–${table.countByReference.max} 条子数据`:`默认 ${table.count} 条`}`).join('\n')}\n\n## 外键关系\n\n${relations.length?relations.join('\n'):'- 当前项目没有外键关系。'}\n`}
+export function relationMarkdown(project: ProjectSchema) {
+  const labels = { random:'种子随机', roundRobin:'轮询均匀', hotspot:'热点 80/20', oneToOne:'严格一对一' }
+  const relations = project.tables.flatMap(table => table.fields.filter(field => field.ref).map(field => {
+    const target = project.tables.find(candidate => candidate.id === field.ref!.tableId)
+    const strategy = field.ref!.strategy ?? 'random'
+    const cardinality = table.countByReference?.fieldId === field.id ? table.countByReference : null
+    const description = cardinality ? `每个父记录 ${cardinality.min}–${cardinality.max} 条` : `${labels[strategy]}${strategy === 'hotspot' ? `，热点池 ${field.ref!.hotspotPercent ?? 20}%` : ''}`
+    return `- \`${table.name}.${field.name}\` → \`${target?.name ?? field.ref!.tableId}.${field.ref!.field}\`（${description}）`
+  }))
+  const calculations = project.tables.flatMap(table => table.fields.filter(field => field.relationValue).map(field => {
+    const rule = field.relationValue!
+    if (rule.kind === 'aggregate') return `- \`${table.name}.${field.name}\` = ${rule.operation.toUpperCase()}(\`${rule.sourceTableId}.${rule.expression}\`)（通过 \`${rule.sourceForeignKey}\` 分组，小数精度 ${rule.precision ?? 2}）`
+    return `- \`${table.name}.${field.name}\` ← \`${rule.sourceTableId}.${rule.sourceField}\`（\`${field.name}\` 所在行的 \`${rule.localForeignKey}\` = \`${rule.sourceKey}\`）`
+  }))
+  const tables = sortTables(project.tables).map((table,index) => `${index + 1}. **${table.label}**（\`${table.name}\`）：${table.fields.length} 字段，${table.countByReference ? `按父记录生成 ${table.countByReference.min}–${table.countByReference.max} 条子数据` : `默认 ${table.count} 条`}`).join('\n')
+  return `# ${project.name} Schema 关系说明\n\n- Schema 版本：${project.version}\n- 随机种子：${project.seed}\n- 造数模式：${project.mode}\n- 数据表：${project.tables.length}\n- 字段：${project.tables.reduce((sum,table)=>sum+table.fields.length,0)}\n\n## 数据表\n\n${tables}\n\n## 外键关系\n\n${relations.length ? relations.join('\n') : '- 当前项目没有外键关系。'}\n\n## 跨表计算\n\n${calculations.length ? calculations.join('\n') : '- 当前项目没有跨表计算规则。'}\n`
+}
 
 export function schemaContractFiles(project:ProjectSchema):ContractFile[]{return[
   {name:'json-schema.json',content:JSON.stringify(toJSONSchema(project),null,2)},

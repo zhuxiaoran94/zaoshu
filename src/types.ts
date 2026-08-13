@@ -27,6 +27,21 @@ export interface FieldReference {
   hotspotPercent?: number
 }
 
+export type RelationValueRule = {
+  kind: 'aggregate'
+  sourceTableId: string
+  sourceForeignKey: string
+  expression: string
+  operation: 'sum' | 'count' | 'min' | 'max'
+  precision?: number
+} | {
+  kind: 'lookup'
+  localForeignKey: string
+  sourceTableId: string
+  sourceKey: string
+  sourceField: string
+}
+
 export interface FieldRule {
   id: string
   name: string
@@ -48,6 +63,7 @@ export interface FieldRule {
   unique?: boolean
   primaryKey?: boolean
   ref?: FieldReference
+  relationValue?: RelationValueRule
   formula?: string
   format?: string
   condition?: FieldCondition

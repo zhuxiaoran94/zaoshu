@@ -20,9 +20,13 @@ export const TEMPLATES: ProjectSchema[] = [
 const commerceTemplate=TEMPLATES.find(template=>template.templateId==='commerce')
 if(commerceTemplate){
   const orders=commerceTemplate.tables.find(table=>table.id==='orders'),items=commerceTemplate.tables.find(table=>table.id==='order_items')
+  const payments=commerceTemplate.tables.find(table=>table.id==='payments')
   const orderUser=orders?.fields.find(field=>field.name==='userId'),itemOrder=items?.fields.find(field=>field.name==='orderId')
   if(orders&&orderUser)orders.countByReference={fieldId:orderUser.id,min:1,max:3}
   if(items&&itemOrder)items.countByReference={fieldId:itemOrder.id,min:2,max:4}
+  const orderAmount=orders?.fields.find(field=>field.name==='amount'),paymentAmount=payments?.fields.find(field=>field.name==='amount')
+  if(orderAmount&&items&&itemOrder){orderAmount.relationValue={kind:'aggregate',sourceTableId:items.id,sourceForeignKey:itemOrder.name,expression:'round(price * quantity, 2)',operation:'sum',precision:2};orderAmount.min=undefined;orderAmount.max=undefined}
+  if(paymentAmount&&orders)paymentAmount.relationValue={kind:'lookup',localForeignKey:'orderId',sourceTableId:orders.id,sourceKey:'id',sourceField:'amount'}
 }
 
 export function cloneTemplate(templateId:string):ProjectSchema {

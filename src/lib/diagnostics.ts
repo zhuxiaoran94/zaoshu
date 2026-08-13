@@ -3,6 +3,7 @@ import { sortTables } from './modeling'
 import { ENUM_SIZES } from '../data/generatorCatalog'
 import { orderFormulaFields, validateFormula } from './formula'
 import { plannedProjectCounts, plannedProjectTotal } from './cardinality'
+import { orderRelationValueFields, validateRelationValueRule } from './relationValues'
 
 export interface DiagnosticIssue {
   id: string
@@ -59,6 +60,8 @@ export function diagnoseProject(project: ProjectSchema): DiagnosticIssue[] {
       if ((field.nullable || 0) + (field.missing || 0) > 100) issues.push({ id: `empty-rate-${field.id}`, level: 'warning', title: '空值比例可能超出预期', detail: `${table.label}.${field.label} 的空值率与缺失率之和超过 100%。`, tableId: table.id, fieldId: field.id, suggestion: '降低空值率或字段缺失率。' })
       if(field.weights){const expected=field.values?.length||ENUM_SIZES[field.generator];if(expected!==undefined&&field.weights.length!==expected)issues.push({id:`weights-length-${field.id}`,level:'error',title:'枚举权重数量不匹配',detail:`${table.label}.${field.label} 有 ${expected} 个候选值，但配置了 ${field.weights.length} 个权重。`,tableId:table.id,fieldId:field.id,suggestion:'为每个候选值配置一个对应权重。'});if(!field.weights.some(weight=>weight>0))issues.push({id:`weights-zero-${field.id}`,level:'error',title:'权重不能全部为零',detail:`${table.label}.${field.label} 的所有候选项权重均为 0。`,tableId:table.id,fieldId:field.id,suggestion:'至少将一个候选项权重设置为大于 0。'})}
       if(field.distributionCenter!==undefined&&field.dataType==='number'&&((field.min!==undefined&&field.distributionCenter<field.min)||(field.max!==undefined&&field.distributionCenter>field.max)))issues.push({id:`distribution-center-${field.id}`,level:'warning',title:'分布中心超出数值范围',detail:`${table.label}.${field.label} 的分布中心 ${field.distributionCenter} 不在配置范围内。`,tableId:table.id,fieldId:field.id,suggestion:'将分布中心调整到最小值和最大值之间。'})
+      validateRelationValueRule(project,table.id,field).forEach((detail,index)=>issues.push({id:`relation-value-${field.id}-${index}`,level:'error',title:'跨表计算规则无效',detail:`${table.label}.${field.label}：${detail}`,tableId:table.id,fieldId:field.id,suggestion:'重新选择关联表和字段，或修正安全表达式。'}))
+      if(field.relationValue&&field.formula)issues.push({id:`relation-formula-${field.id}`,level:'error',title:'字段存在两个计算来源',detail:`${table.label}.${field.label} 同时配置了行内公式和跨表计算。`,tableId:table.id,fieldId:field.id,suggestion:'只保留一种计算规则。'})
       field.condition?.rules.forEach((rule, index) => {
         if (rule.field === field.name) issues.push({ id: `condition-self-${field.id}-${index}`, level: 'error', title: '条件不能引用字段自身', detail: `${table.label}.${field.label} 的第 ${index + 1} 条条件引用了自身。`, tableId: table.id, fieldId: field.id, suggestion: '选择当前表中的另一个字段作为条件来源。' })
         else if (!table.fields.some(candidate => candidate.name === rule.field)) issues.push({ id: `condition-field-${field.id}-${index}`, level: 'error', title: '条件引用不存在字段', detail: `${table.label}.${field.label} 的条件引用了 ${rule.field}，但该字段不存在。`, tableId: table.id, fieldId: field.id, suggestion: '重新选择条件来源字段，或移除这条规则。' })
@@ -72,6 +75,7 @@ export function diagnoseProject(project: ProjectSchema): DiagnosticIssue[] {
     if (count > 1) issues.push({ id: `duplicate-table-${name}`, level: 'error', title: '数据表名称重复', detail: `存在 ${count} 张名为 ${name} 的数据表，SQL 导出会发生冲突。`, suggestion: '为每张数据表设置不同的英文名称。' })
   })
   try { sortTables(project.tables) } catch (error) { issues.push({ id: 'dependency-cycle', level: 'error', title: '存在循环依赖', detail: error instanceof Error ? error.message : '数据表之间形成循环引用。', suggestion: '移除其中一条外键引用，确保依赖关系可以排序。' }) }
+  try{orderRelationValueFields(project)}catch(error){issues.push({id:'relation-value-cycle',level:'error',title:'跨表计算循环依赖',detail:error instanceof Error?error.message:'跨表计算规则相互引用。',suggestion:'移除其中一条跨表计算规则，使计算方向保持单向。'})}
   if (!tableIds.size) issues.push({ id: 'no-table', level: 'error', title: '项目没有数据表', detail: '至少需要一张数据表才能生成数据。', suggestion: '新增数据表或选择一个内置模板。' })
   return issues
 }

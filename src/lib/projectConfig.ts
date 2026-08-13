@@ -24,6 +24,11 @@ const conditionSchema = z.object({
   otherwise: z.enum(['null', 'omit']),
 })
 
+const relationValueSchema = z.discriminatedUnion('kind', [
+  z.object({ kind:z.literal('aggregate'),sourceTableId:z.string().min(1).max(80),sourceForeignKey:z.string().min(1).max(80),expression:z.string().min(1).max(500),operation:z.enum(['sum','count','min','max']),precision:z.number().int().min(0).max(12).optional() }),
+  z.object({ kind:z.literal('lookup'),localForeignKey:z.string().min(1).max(80),sourceTableId:z.string().min(1).max(80),sourceKey:z.string().min(1).max(80),sourceField:z.string().min(1).max(80) }),
+])
+
 const fieldSchema = z.object({
   id: z.string().min(1).max(100),
   name: z.string().min(1).max(80).regex(/^[A-Za-z_][A-Za-z0-9_]*$/, '字段名只能使用字母、数字和下划线'),
@@ -45,6 +50,7 @@ const fieldSchema = z.object({
   unique: z.boolean().optional(),
   primaryKey: z.boolean().optional(),
   ref: refSchema.optional(),
+  relationValue: relationValueSchema.optional(),
   formula: z.string().max(500).optional(),
   format: z.string().max(500).optional(),
   condition: conditionSchema.optional(),
