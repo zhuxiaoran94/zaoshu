@@ -84,6 +84,7 @@ type MockDatabase = Record<string, MockRecord[]>
 type FieldValidation = { name: string; type: string; required: boolean; nullable: boolean; values?: unknown[]; min?: number; max?: number; maxLength?: number }
 type ResourceDefinition = { resource: string; key: string; numericKey: boolean; fields: readonly string[]; uniqueFields: readonly string[]; validation: readonly FieldValidation[] }
 type ValidationIssue = { field: string; rule: string; message: string }
+type FilterResult = { ok: true; rows: MockRecord[] } | { ok: false; response: Response }
 export type MockRequestLog = { id: string; sequence: number; method: string; path: string; status: number; latencyMs: number; injectedFailure: boolean; idempotentReplay: boolean; routeOverride?: string }
 export type MockSnapshotSummary = { name: string; revision: number; bytes: number; totalRows: number; rows: Record<string, number> }
 type StoredSnapshot = { summary: MockSnapshotSummary; database: MockDatabase }
@@ -102,6 +103,7 @@ ${relationDefinitions}
 ] as const
 const resourceByName = new Map(resources.map(resource => [resource.resource, resource]))
 const controlParams = new Set(['q', '_page', '_limit', '_sort', '_order'])
+const filterOperators = new Set(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'starts', 'ends', 'in', 'isnull'])
 const requestCounts = new Map<string, number>()
 export const requestLog: MockRequestLog[] = []
 let requestSequence = 0
@@ -131,6 +133,50 @@ const requestJson = async (request: Request) => {
   } catch {
     return null
   }
+}
+const comparable = (value: unknown, type: string) => {
+  if (value == null) return null
+  if (type === 'number') { const number = Number(value); return Number.isFinite(number) ? number : null }
+  if (type === 'boolean') return value === true || value === 'true' ? 1 : value === false || value === 'false' ? 0 : null
+  const date = /^\d{4}-\d{2}-\d{2}/.test(String(value)) ? Date.parse(String(value)) : NaN
+  return Number.isFinite(date) ? date : String(value)
+}
+const filterRows = (rows: MockRecord[], url: URL, resource: ResourceDefinition): FilterResult => {
+  const entries: [string, string][] = []
+  url.searchParams.forEach((value, key) => entries.push([key, value]))
+  if (entries.length > 50) return { ok: false, response: errorResponse(400, 'Query parameter limit is 50') }
+  for (const [parameter, expected] of entries) {
+    if (parameter.length > 120 || expected.length > 1000) return { ok: false, response: errorResponse(400, 'Query parameter name or value exceeds limit') }
+    if (controlParams.has(parameter)) continue
+    const separator = parameter.lastIndexOf('__'), field = separator > 0 ? parameter.slice(0, separator) : parameter, operator = separator > 0 ? parameter.slice(separator + 2) : 'eq'
+    if (!resource.fields.includes(field)) continue
+    if (!filterOperators.has(operator)) return { ok: false, response: errorResponse(400, 'Unknown filter operator: ' + operator) }
+    const definition = resource.validation.find(item => item.name === field), type = definition?.type ?? 'string', lowered = expected.toLocaleLowerCase()
+    if (operator === 'in') {
+      const candidates = expected.split(',')
+      if (candidates.length > 50) return { ok: false, response: errorResponse(400, 'Filter in operator accepts at most 50 values') }
+      rows = rows.filter(row => candidates.some(candidate => sameId(row[field], candidate)))
+      continue
+    }
+    if (operator === 'isnull') {
+      if (!['true', 'false'].includes(lowered)) return { ok: false, response: errorResponse(400, 'isnull filter must be true or false') }
+      rows = rows.filter(row => (row[field] == null) === (lowered === 'true'))
+      continue
+    }
+    if (['contains', 'starts', 'ends'].includes(operator)) {
+      rows = rows.filter(row => { const actual = String(row[field] ?? '').toLocaleLowerCase(); return operator === 'contains' ? actual.includes(lowered) : operator === 'starts' ? actual.startsWith(lowered) : actual.endsWith(lowered) })
+      continue
+    }
+    const target = comparable(expected, type)
+    if (target === null) return { ok: false, response: errorResponse(400, 'Filter value has invalid type for field: ' + field) }
+    rows = rows.filter(row => {
+      const actual = comparable(row[field], type)
+      if (operator === 'eq' || operator === 'ne') { const equal = actual === target; return operator === 'eq' ? equal : !equal }
+      if (actual === null) return false
+      return operator === 'gt' ? actual > target : operator === 'gte' ? actual >= target : operator === 'lt' ? actual < target : actual <= target
+    })
+  }
+  return { ok: true, rows }
 }
 const asRecord = (value: unknown) => value && typeof value === 'object' && !Array.isArray(value) ? value as MockRecord : null
 const jsonBody = async (request: Request) => asRecord(await requestJson(request))
@@ -410,22 +456,27 @@ export const handlers = resources.flatMap(resource => [
     const url = new URL(request.url)
     const query = (url.searchParams.get('q') ?? '').toLocaleLowerCase()
     let rows = [...db[resource.resource]]
+    const filtered = filterRows(rows, url, resource)
+    if (!filtered.ok) return filtered.response
+    rows = filtered.rows
     if (query) {
       rows = rows.filter(row =>
         Object.values(row).some(value => String(value ?? '').toLocaleLowerCase().includes(query)),
       )
     }
-    url.searchParams.forEach((value, field) => {
-      if (!controlParams.has(field) && resource.fields.includes(field)) {
-        rows = rows.filter(row => String(row[field] ?? '') === value)
-      }
-    })
-    const sort = url.searchParams.get('_sort')
-    const order = url.searchParams.get('_order') === 'desc' ? -1 : 1
-    if (sort && resource.fields.includes(sort)) {
-      rows.sort((left, right) =>
-        String(left[sort] ?? '').localeCompare(String(right[sort] ?? ''), undefined, { numeric: true }) * order,
-      )
+    const sortInput = url.searchParams.get('_sort'), fallbackOrder = url.searchParams.get('_order') === 'desc' ? -1 : 1
+    if (sortInput) {
+      const sorts = sortInput.split(',').filter(Boolean)
+      if (sorts.length > 5) return errorResponse(400, 'Sort field limit is 5')
+      if (sorts.some(sort => !resource.fields.includes(sort.replace(/^-/, '')))) return errorResponse(400, 'Unknown sort field')
+      rows.sort((left, right) => {
+        for (const sort of sorts) {
+          const descending = sort.startsWith('-'), field = sort.replace(/^-/, ''), definition = resource.validation.find(item => item.name === field), leftValue = comparable(left[field], definition?.type ?? 'string'), rightValue = comparable(right[field], definition?.type ?? 'string')
+          const compared = leftValue === rightValue ? 0 : leftValue == null ? -1 : rightValue == null ? 1 : leftValue < rightValue ? -1 : 1
+          if (compared) return compared * (descending ? -1 : sorts.length === 1 ? fallbackOrder : 1)
+        }
+        return 0
+      })
     }
     const page = Math.max(1, Number(url.searchParams.get('_page')) || 1)
     const limit = Math.max(1, Math.min(1000, Number(url.searchParams.get('_limit')) || 20))
@@ -780,8 +831,9 @@ afterAll(() => server.close())
 
 ## 路由
 
-${routes.map(route=>`- \`GET ${route.list}?_page=1&_limit=20&_sort=${route.primaryKey}&_order=asc&q=关键字\`
+${routes.map(route=>`- \`GET ${route.list}?_page=1&_limit=20&_sort=-${route.primaryKey}&q=关键字\`
 - \`GET ${route.list}?字段名=精确值\`
+- \`GET ${route.list}?price__gte=100&status__in=成功,失败&name__contains=耳机\`
 - \`GET ${route.detail}\`
 - \`POST ${route.list}\`
 - \`POST ${route.batch}\`（1–1,000 条，失败整批回滚）
@@ -807,7 +859,7 @@ ${routes.map(route=>`- \`GET ${route.list}?_page=1&_limit=20&_sort=${route.prima
 
 ${nested.length?`### 父子嵌套查询\n\n${nested.map(route=>`- \`GET ${route.path}\`（${route.parent} → ${route.child}.${route.foreignKey}）`).join('\n')}\n`:''}
 
-列表响应包含 \`X-Total-Count\`，业务响应包含稳定请求编号 \`X-Mock-Request-Id\` 和实际等待毫秒数 \`X-Mock-Latency\`，注入失败额外包含 \`X-Mock-Injected-Failure: true\`；单页最多 1,000 条。单条 GET/POST/PATCH/DELETE 返回基于当前记录内容的强 \`ETag\`；GET 可发送 \`If-None-Match\` 获得 304，PATCH/DELETE 可发送 \`If-Match\`，过期时返回 412 与最新 ETag，避免旧页面覆盖新数据。批量修改/删除可在每项携带 \`ifMatch\`，跨表事务的 update/delete 动作也支持它，任一过期会回滚全部前序变更。单条 POST、批量 POST 和跨表事务可发送 1–80 位 \`Idempotency-Key\`：同键、同方法、同路径和同请求体会原样重放且只写入一次，响应带 \`X-Mock-Idempotent-Replay: true\`；同键异参返回 409。缓存限制为最近 100 项和 10 MiB，请求签名输入限制 1 MiB；故障注入发生在幂等处理之前，因此模拟网络失败不会缓存，客户端可以按真实习惯重试。POST 自动补充缺失主键，主键或 Schema 中标记为 unique 的字段重复时返回 409 与 \`field/rule=unique\`。严格 Schema 校验关闭时，未知字段被兼容性丢弃；开启后，未知字段、类型、必填、空值、枚举、范围、长度和 PATCH 主键修改均返回 422，并附带 \`field\` 与 \`rule\`。开启外键校验时，POST/PATCH 的悬空外键返回 422。批量新增接受 JSON 数组或 \`{ items: [] }\`；单批最多 1,000 条。任一条格式、Schema、唯一、主键、外键、ETag 或引用策略失败都会整批不落库，并在错误中返回从 0 开始的 \`index\`。级联批量删除会在 \`meta.cascaded\` 返回额外清理的后代数量。
+列表字段筛选支持 \`eq/ne/gt/gte/lt/lte/contains/starts/ends/in/isnull\`，多个参数按 AND 组合；\`_sort=-price,name\` 可按最多 5 个字段排序。为避免恶意查询拖慢本地页面，每次最多 50 个参数，名称最多 120 字符、值最多 1,000 字符、\`in\` 最多 50 项，超过时返回 400。列表响应包含 \`X-Total-Count\`，业务响应包含稳定请求编号 \`X-Mock-Request-Id\` 和实际等待毫秒数 \`X-Mock-Latency\`，注入失败额外包含 \`X-Mock-Injected-Failure: true\`；单页最多 1,000 条。单条 GET/POST/PATCH/DELETE 返回基于当前记录内容的强 \`ETag\`；GET 可发送 \`If-None-Match\` 获得 304，PATCH/DELETE 可发送 \`If-Match\`，过期时返回 412 与最新 ETag，避免旧页面覆盖新数据。批量修改/删除可在每项携带 \`ifMatch\`，跨表事务的 update/delete 动作也支持它，任一过期会回滚全部前序变更。单条 POST、批量 POST 和跨表事务可发送 1–80 位 \`Idempotency-Key\`：同键、同方法、同路径和同请求体会原样重放且只写入一次，响应带 \`X-Mock-Idempotent-Replay: true\`；同键异参返回 409。缓存限制为最近 100 项和 10 MiB，请求签名输入限制 1 MiB；故障注入发生在幂等处理之前，因此模拟网络失败不会缓存，客户端可以按真实习惯重试。POST 自动补充缺失主键，主键或 Schema 中标记为 unique 的字段重复时返回 409 与 \`field/rule=unique\`。严格 Schema 校验关闭时，未知字段被兼容性丢弃；开启后，未知字段、类型、必填、空值、枚举、范围、长度和 PATCH 主键修改均返回 422，并附带 \`field\` 与 \`rule\`。开启外键校验时，POST/PATCH 的悬空外键返回 422。批量新增接受 JSON 数组或 \`{ items: [] }\`；单批最多 1,000 条。任一条格式、Schema、唯一、主键、外键、ETag 或引用策略失败都会整批不落库，并在错误中返回从 0 开始的 \`index\`。级联批量删除会在 \`meta.cascaded\` 返回额外清理的后代数量。
 
 ## 文件
 
@@ -846,6 +898,18 @@ describe(${JSON.stringify(project.name+' Mock API')}, () => {
     expect(response.status).toBe(200)
     expect(Number(response.headers.get('X-Total-Count'))).toBe(db[${JSON.stringify(first.name)}].length)
     expect(unwrap(await response.json())).toHaveLength(Math.min(2, db[${JSON.stringify(first.name)}].length))
+  })
+
+  it('组合高级筛选、多字段排序并拒绝过量查询', async () => {
+    const table = ${JSON.stringify(first.name)}, rows = db[table]
+    const field = ${JSON.stringify(firstMutable.name)}, values = rows.slice(0, 2).map(row => encodeURIComponent(String(row[field] ?? '')))
+    const response = await fetch(origin + ${JSON.stringify(`/api/${first.name}?`)} + encodeURIComponent(field + '__in') + '=' + values.join(',') + '&_sort=-' + encodeURIComponent(${JSON.stringify(firstPrimary.name)}))
+    expect(response.status).toBe(200)
+    const matched = unwrap(await response.json()) as Record<string, unknown>[]
+    expect(matched.length).toBeGreaterThan(0)
+    expect(matched.every(row => rows.slice(0, 2).some(source => String(source[field]) === String(row[field])))).toBe(true)
+    expect((await fetch(origin + ${JSON.stringify(`/api/${first.name}?`)} + Array.from({ length: 51 }, (_, index) => 'x' + index + '=1').join('&'))).status).toBe(400)
+    expect((await fetch(origin + ${JSON.stringify(`/api/${first.name}?`)} + encodeURIComponent(field + '__contains') + '=' + encodeURIComponent('x'.repeat(1001)))).status).toBe(400)
   })
 
   it('完成新增、修改、删除并可复位', async () => {
