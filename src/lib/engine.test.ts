@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { cloneTemplate } from '../data/templates'
 import { analyzePairwiseCoverage, generatePairwise, generateProject, generateStateEvents, matchesFieldCondition, parsePairwiseRules, refreshGeneratedResult, regenerateDataRow, sortTables } from './engine'
-import { neutralizeSpreadsheetFormula, toCSV, toSQL } from './exporters'
+import { createExportPackage, createZip, neutralizeSpreadsheetFormula, sha256Fallback, toCSV, toSQL, toXML, toYAML } from './exporters'
 import { parseProjectFile, serializeProject } from './projectConfig'
 import type { FieldRule } from '../types'
 
@@ -118,5 +118,18 @@ describe('Mock造数引擎',()=>{
     const refreshed=refreshGeneratedResult(project,result,data)
     expect(refreshed.report.totalRows).toBe(result.report.totalRows-1)
     expect(refreshed.report.checks.find(check=>check.id==='count-api_requests')?.status).toBe('fail')
+  })
+  it('YAML 与 XML 导出会保留结构并转义特殊字符',()=>{
+    expect(toYAML({name:'A&B',values:[1,true,null]})).toContain('"values":')
+    const project=cloneTemplate('testing');project.name='A&B';project.tables.forEach(table=>table.count=1);const result=generateProject(project)
+    expect(toXML(project,result.data)).toContain('project="A&amp;B"')
+  })
+  it('ZIP 包包含有效目录与 SHA-256 Manifest',async()=>{
+    const project=cloneTemplate('testing');project.tables.forEach(table=>table.count=2);const result=generateProject(project),pack=await createExportPackage('csv',project,result.data,result.report,'api_requests'),bytes=new Uint8Array(await pack.blob.arrayBuffer())
+    expect(new DataView(bytes.buffer).getUint32(0,true)).toBe(0x04034b50)
+    expect(new TextDecoder().decode(bytes)).toContain('manifest.json')
+    expect(pack.manifest.files[0]).toMatchObject({name:expect.stringContaining('.csv'),bytes:expect.any(Number),sha256:expect.stringMatching(/^[a-f0-9]{64}$/)})
+    expect(createZip([{name:'中文.txt',content:'测试'}]).length).toBeGreaterThan(40)
+    expect(sha256Fallback(new TextEncoder().encode('abc'))).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad')
   })
 })

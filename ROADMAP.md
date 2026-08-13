@@ -21,6 +21,8 @@
 - [x] 结果编辑后自动重跑质量检查
 - [x] OpenAPI 3.x JSON Schema 导入
 - [x] JSON 样例结构与多数组推断
+- [x] YAML、XML 及六类测试框架 Fixture 导出
+- [x] ZIP 多文件交付包、Manifest 与 SHA-256 校验
 
 ## 近期版本
 

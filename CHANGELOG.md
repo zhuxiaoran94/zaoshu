@@ -1,5 +1,21 @@
 # 更新日志
 
+## 2.1.0 - 可审计导出版
+
+### 新增
+
+- 新增 YAML 与 XML 导出，并对 XML 属性和值进行完整实体转义。
+- 新增 Playwright、Cypress、Jest、pytest 和 JUnit 专用 Fixture。
+- 所有导出统一为 ZIP 包，内附 `manifest.json`。
+- Manifest 记录项目、Schema、种子、生成器版本、数量、异常比例、文件字节数和 SHA-256。
+- 新增完整交付包：全量 JSON、每表 CSV、MySQL/PostgreSQL/SQLite 和 Markdown 覆盖报告。
+
+### 安全与质量
+
+- 使用标准 SHA-256，包含 Web Crypto 快路径和兼容实现，并通过标准摘要向量测试。
+- ZIP 由本地无压缩存储模式生成，不引入新的第三方运行时依赖。
+- CSV、JUnit CSV 和 XLSX 继续统一阻断公式注入。
+
 ## 2.0.0 - Schema 建模版
 
 ### 新增

@@ -374,11 +374,15 @@
 .schema-preview article > small { overflow: hidden; color: var(--muted); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
 .schema-preview > p { display: flex; align-items: center; gap: 5px; margin: 0; border-top: 1px solid #f0d9aa; background: #fff9ec; padding: 7px 9px; color: #8d620e; font-size: 8px; }
 .schema-preview > p svg { width: 12px; }
+.export-modal { width: min(760px, 100%); }
+.export-modal .format-grid { grid-template-columns: repeat(4, 1fr); max-height: 390px; overflow: auto; }
+.export-modal .format-grid button:first-child { grid-column: span 2; border-color: #93c8c4; background: #effaf7; }
 
 @media (max-width: 680px) {
   .schema-import-button { display: none; }
   .schema-preview article { grid-template-columns: 1fr 50px 50px; }
   .schema-preview article > small { grid-column: 1 / -1; }
+  .export-modal .format-grid { grid-template-columns: 1fr 1fr; }
 }
 
 @media (max-width: 680px) {
