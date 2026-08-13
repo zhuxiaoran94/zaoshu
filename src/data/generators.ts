@@ -1,5 +1,6 @@
 import { fakerZH_CN as faker } from '@faker-js/faker'
 import type { FieldRule } from '../types'
+import { ENUM_VALUES } from './enumValues'
 export { GENERATORS } from './generatorCatalog'
 
 const pick = <T>(items: T[], index?: number): T => items[(index ?? faker.number.int({ min: 0, max: items.length - 1 })) % items.length]
@@ -7,16 +8,6 @@ const pad = (n: number, width = 6) => String(n).padStart(width, '0')
 const randomDigits = (len: number) => Array.from({ length: len }, () => faker.number.int({ min: 0, max: 9 })).join('')
 const cnWords = ['质量','星河','智造','远航','敏捷','数智','云端','先锋','卓越','未来','协同','守护']
 const DETERMINISTIC_EPOCH = 1755129600000
-const enumMap: Record<string, unknown[]> = {
-  gender:['男','女','未知'], zodiac:['鼠','牛','虎','兔','龙','蛇','马','羊','猴','鸡','狗','猪'], constellation:['白羊座','金牛座','双子座','巨蟹座','狮子座','处女座','天秤座','天蝎座','射手座','摩羯座','水瓶座','双鱼座'],
-  memberLevel:['普通','白银','黄金','黑金'], timezone:['Asia/Shanghai','Asia/Tokyo','Europe/London','America/New_York'], locale:['zh-CN','en-US','ja-JP'], language:['中文','English','日本語'],
-  httpMethod:['GET','POST','PUT','PATCH','DELETE'], httpStatus:[200,201,204,400,401,403,404,409,422,500], contentType:['application/json','multipart/form-data','text/plain','application/xml'], os:['macOS','Windows 11','Ubuntu','iOS','Android'], browser:['Chrome','Safari','Edge','Firefox'],
-  currency:['CNY','USD','EUR','JPY','HKD'], bank:['工商银行','建设银行','招商银行','中国银行','浦发银行'], riskLevel:['低风险','中风险','高风险'], transactionType:['收入','支出','转账','退款'], transactionStatus:['处理中','成功','失败','已撤销'],
-  userStatus:['正常','冻结','注销','待激活'], accountType:['个人','企业','测试'], productCategory:['数码','服饰','食品','家居','运动'], brand:['云杉','北辰','逐光','原野','墨石'], specification:['标准版','轻享版','专业版','旗舰版'], unit:['件','套','盒','台','kg'],
-  orderStatus:['待支付','已支付','待发货','已发货','已签收','已退款'], paymentMethod:['微信支付','支付宝','银行卡','余额'], logisticsStatus:['已揽收','运输中','到达网点','派送中','已签收'], gameClass:['战士','法师','游侠','牧师','刺客'], equipmentQuality:['普通','精良','稀有','史诗','传说'], questStatus:['未领取','进行中','已完成','已领奖'],
-  approvalStatus:['待审批','已通过','已驳回','已撤销'], priority:['P0','P1','P2','P3'], serverName:['晨曦之地','风暴峡谷','星海边境','永夜之城'], itemName:['生命药水','秘银长剑','星尘宝箱','传送卷轴'], reportReason:['垃圾广告','侵权','辱骂','虚假信息'], batchStatus:['待执行','执行中','成功','部分失败','失败'], boolean:[true,false],
-}
-
 const isoDate = (d: Date, withTime = false) => withTime ? d.toISOString() : d.toISOString().slice(0,10)
 const boundedNumber = (rule: FieldRule, defaultMin = 0, defaultMax = 100) => {
   const min = rule.min ?? defaultMin; const max = rule.max ?? defaultMax
@@ -45,7 +36,7 @@ export function generateValue(rule: FieldRule, rowIndex: number, pools: Record<s
   if (rule.fixedValue !== undefined && rule.fixedValue !== '') return rule.fixedValue
   if (g === 'customEnum' && rule.values?.length) return context.mode==='realistic'?(rule.values[weightedIndex(rule.values.length,rule.weights)]):pick(rule.values, rowIndex)
   if (g === 'dataPool') {const values=pools[rule.fixedValue || ''] || ['未配置数据池'];return context.mode==='realistic'?values[weightedIndex(values.length,rule.weights)]:pick(values,rowIndex)}
-  if (enumMap[g]) {const values=enumMap[g];if(context.mode==='realistic'&&(rule.weights?.length===values.length||rule.distribution==='hotspot'))return values[weightedIndex(values.length,rule.weights||[70,...Array(Math.max(0,values.length-1)).fill(30/Math.max(1,values.length-1))])];return pick(values,rowIndex)}
+  if (ENUM_VALUES[g]) {const values=ENUM_VALUES[g];if(context.mode==='realistic'&&(rule.weights?.length===values.length||rule.distribution==='hotspot'))return values[weightedIndex(values.length,rule.weights||[70,...Array(Math.max(0,values.length-1)).fill(30/Math.max(1,values.length-1))])];return pick(values,rowIndex)}
   if (['autoId','sequence'].includes(g)) return (rule.min ?? 1) + rowIndex * (rule.max ?? 1)
   if (g === 'uuid') return faker.string.uuid()
   if (g === 'ulid') return `${(DETERMINISTIC_EPOCH+rowIndex).toString(36).toUpperCase()}${faker.string.alphanumeric(16).toUpperCase()}`.slice(0,26)
@@ -100,7 +91,7 @@ export function generateValue(rule: FieldRule, rowIndex: number, pools: Record<s
   if (g === 'float') return context.mode==='realistic'?distributedNumber({...rule,precision:rule.precision??2},rowIndex,context.totalRows??1,0,1000):boundedNumber({...rule,precision:rule.precision??2},0,1000)
   if (['amount','fee','exchangeRate'].includes(g)) return context.mode==='realistic'?distributedNumber({...rule,precision:rule.precision??2},rowIndex,context.totalRows??1,rule.min??0.01,rule.max??9999):boundedNumber({...rule,precision:rule.precision??2},rule.min??0.01,rule.max??9999)
   if (g === 'discount') return context.mode==='realistic'?distributedNumber({...rule,precision:2},rowIndex,context.totalRows??1,0,1):boundedNumber({...rule,precision:2},0,1)
-  if (g === 'taxRate') {const values=[0,0.03,0.06,0.09,0.13];return context.mode==='realistic'?values[weightedIndex(values.length,rule.weights)]:pick(values)}
+  if (g === 'taxRate') {const values=ENUM_VALUES.taxRate as number[];return context.mode==='realistic'?values[weightedIndex(values.length,rule.weights)]:pick(values)}
   if (g === 'percentage') return context.mode==='realistic'?distributedNumber({...rule,precision:2},rowIndex,context.totalRows??1,0,100):boundedNumber({...rule,precision:2},0,100)
   if (g === 'probability') return context.mode==='realistic'?distributedNumber({...rule,precision:3},rowIndex,context.totalRows??1,0,1):boundedNumber({...rule,precision:3},0,1)
   if (g === 'rating') return context.mode==='realistic'?distributedNumber({...rule,precision:1},rowIndex,context.totalRows??1,1,5):boundedNumber({...rule,precision:1},1,5)
@@ -136,7 +127,7 @@ export function generateValue(rule: FieldRule, rowIndex: number, pools: Record<s
   if (g === 'emoji') return pick(['🚀','🧪','✅','🎮','📦','💡'])
   if (g === 'specialChars') return pick([`' OR 1=1 --`,'<script>alert(1)</script>','../../etc/passwd','测试\n换行','é'])
   if (g === 'productName') return `${pick(cnWords)}${pick(['耳机','手表','键盘','背包'])}`
-  if (g === 'serverName' || g === 'itemName' || g === 'guildName') return pick(enumMap[g] ?? [`${pick(cnWords)}公会`])
+  if (g === 'serverName' || g === 'itemName' || g === 'guildName') return pick(ENUM_VALUES[g] ?? [`${pick(cnWords)}公会`])
   if (g === 'playerLevel') return context.mode==='realistic'?distributedNumber(rule,rowIndex,context.totalRows??1,1,100):boundedNumber(rule,1,100)
   if (g === 'experience') return context.mode==='realistic'?distributedNumber(rule,rowIndex,context.totalRows??1,0,999999):boundedNumber(rule,0,999999)
   if (g === 'gold') return context.mode==='realistic'?distributedNumber(rule,rowIndex,context.totalRows??1,0,1000000):boundedNumber(rule,0,1000000)

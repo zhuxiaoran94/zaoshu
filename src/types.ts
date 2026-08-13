@@ -84,6 +84,18 @@ export interface QualityCheck {
   tableId?: string
 }
 
+export type CoverageGapKind = 'enum' | 'null' | 'missing' | 'boundary'
+
+export interface CoverageGap {
+  id: string
+  kind: CoverageGapKind
+  tableId: string
+  fieldId: string
+  label: string
+  detail: string
+  missingValues: unknown[]
+}
+
 export interface GenerationReport {
   duration: number
   totalRows: number
@@ -91,6 +103,7 @@ export interface GenerationReport {
   abnormalRows: number
   checks: QualityCheck[]
   coverage: Array<{ label: string; value: number; detail: string }>
+  gaps: CoverageGap[]
   generatedAt: string
 }
 

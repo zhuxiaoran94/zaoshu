@@ -1,4 +1,5 @@
 import type { DataType, GeneratorDefinition } from '../types'
+import { ENUM_VALUES } from './enumValues'
 
 const definitions: Array<[string, string, string, DataType, string?]> = [
   ['autoId','自增 ID','标识','number','10001'], ['uuid','UUID','标识','string'], ['ulid','ULID','标识','string'], ['snowflake','雪花 ID','标识','string'],
@@ -41,4 +42,4 @@ const definitions: Array<[string, string, string, DataType, string?]> = [
 ]
 
 export const GENERATORS: GeneratorDefinition[] = definitions.map(([key,name,category,dataType,sample])=>({key,name,category,dataType,sample}))
-export const ENUM_SIZES:Record<string,number>={gender:3,zodiac:12,constellation:12,memberLevel:4,timezone:4,locale:3,language:3,httpMethod:5,httpStatus:10,contentType:4,os:5,browser:4,currency:5,bank:5,riskLevel:3,transactionType:4,transactionStatus:4,userStatus:4,accountType:3,productCategory:5,brand:5,specification:4,unit:5,orderStatus:6,paymentMethod:4,logisticsStatus:5,gameClass:5,equipmentQuality:5,questStatus:4,approvalStatus:4,priority:4,serverName:4,itemName:4,reportReason:4,batchStatus:5,boolean:2,taxRate:5}
+export const ENUM_SIZES:Record<string,number>=Object.fromEntries(Object.entries(ENUM_VALUES).map(([key,values])=>[key,values.length]))

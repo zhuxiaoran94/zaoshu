@@ -1,6 +1,7 @@
-import type { ConditionOperator, DataMode, DataRow, FieldRule, GenerateResult, GeneratedData, ProjectSchema } from '../types'
+import type { ConditionOperator, CoverageGap, DataMode, DataRow, FieldRule, GenerateResult, GeneratedData, ProjectSchema } from '../types'
 import { generateValue, reseed } from '../data/generators'
 import { sortTables, validate } from './modeling'
+import { analyzeCoverage, coveragePercentage } from './coverage'
 export { refreshGeneratedResult, sortTables, validate } from './modeling'
 
 function hash(value:string) { let h=2166136261; for(const c of value) { h ^= c.charCodeAt(0); h=Math.imul(h,16777619) } return h>>>0 }
@@ -103,16 +104,43 @@ export function generateProject(project:ProjectSchema,pools:Record<string,string
   }
   const checks=validate(project,data)
   const all=Object.values(data).flat(); const abnormal=all.filter(r=>r._mock_meta).length
-  const enumFields=project.tables.flatMap(t=>t.fields).filter(f=>f.values?.length||['userStatus','orderStatus','transactionStatus','questStatus','logisticsStatus'].includes(f.generator))
   const distributionFields=project.tables.flatMap(t=>t.fields).filter(f=>f.distribution||f.weights?.length)
+  const analysis=analyzeCoverage(project,data)
   const coverage=[
     {label:'字段生成覆盖',value:100,detail:`${project.tables.reduce((n,t)=>n+t.fields.length,0)} 个字段已生成`},
     {label:'约束通过率',value:Math.round(checks.filter(c=>c.status==='pass').length/Math.max(1,checks.length)*100),detail:`${checks.filter(c=>c.status==='pass').length}/${checks.length} 项检查通过`},
-    {label:'枚举覆盖',value:enumFields.length?Math.min(100,65+enumFields.length*4):100,detail:`覆盖 ${enumFields.length} 个枚举字段`},
+    {label:'枚举值覆盖',value:coveragePercentage(analysis.enumCovered,analysis.enumTotal),detail:analysis.enumTotal?`${analysis.enumCovered}/${analysis.enumTotal} 个候选值已出现`:`当前项目没有可审计枚举字段`},
+    {label:'空值场景覆盖',value:coveragePercentage(analysis.emptyCovered,analysis.emptyTotal),detail:analysis.emptyTotal?`${analysis.emptyCovered}/${analysis.emptyTotal} 个 NULL/缺失规则已命中`:'当前项目未配置空值或缺失率'},
+    {label:'数值边界覆盖',value:coveragePercentage(analysis.boundaryCovered,analysis.boundaryTotal),detail:analysis.boundaryTotal?`${analysis.boundaryCovered}/${analysis.boundaryTotal} 个最小/最大值已出现`:'当前项目没有显式数值边界'},
     {label:'真实分布配置',value:project.mode==='realistic'?(distributionFields.length?100:60):0,detail:project.mode==='realistic'?`${distributionFields.length} 个字段使用业务权重或趋势配置`:'切换到真实分布模式后统计'},
     {label:'异常策略覆盖',value:project.mode==='exception'?Math.min(100,Math.round(abnormal/7*100)):0,detail:`命中 ${abnormal} 条异常数据`},
   ]
-  return {data,report:{duration:Math.round(performance.now()-started),totalRows:all.length,normalRows:all.length-abnormal,abnormalRows:abnormal,checks,coverage,generatedAt:new Date().toISOString()}}
+  return {data,report:{duration:Math.round(performance.now()-started),totalRows:all.length,normalRows:all.length-abnormal,abnormalRows:abnormal,checks,coverage,gaps:analysis.gaps,generatedAt:new Date().toISOString()}}
+}
+
+export function supplementCoverageGaps(project:ProjectSchema,data:GeneratedData,pools:Record<string,string[]>={},selectedGaps?:CoverageGap[]){
+  const gaps=selectedGaps??analyzeCoverage(project,data).gaps,nextData:GeneratedData=structuredClone(data),addedByTable:Record<string,number>={}
+  for(const table of sortTables(project.tables)){
+    const tableGaps=gaps.filter(gap=>gap.tableId===table.id),fieldOffsets=new Map<string,number>(),scheduled=tableGaps.map(gap=>{const start=fieldOffsets.get(gap.fieldId)??0;fieldOffsets.set(gap.fieldId,start+gap.missingValues.length);return{gap,start}}),needed=Math.max(0,...fieldOffsets.values());if(!needed)continue
+    const rows=nextData[table.id]||[],uniqueMap=new Map(table.fields.filter(field=>field.unique||field.primaryKey).map(field=>[field.name,new Set(rows.map(row=>row[field.name]))]))
+    reseed((project.seed+hash(table.id)+rows.length)>>>0);const random=seeded((project.seed^hash(table.id)^rows.length)>>>0)
+    for(let offset=0;offset<needed;offset++){
+      const rowIndex=rows.length,row:DataRow={}
+      for(const field of table.fields){
+        let value:unknown
+        if(field.ref){const parent=nextData[field.ref.tableId]||[];value=parent.length?parent[Math.floor(random()*parent.length)][field.ref.field]:null}else value=modeValue(field,rowIndex,project.mode,pools,rows.length+needed)
+        if(field.unique||field.primaryKey){const used=uniqueMap.get(field.name)??new Set<unknown>();let tries=0;while(used.has(value)&&tries++<100)value=modeValue(field,rowIndex+tries+hash(field.id),project.mode,pools,rows.length+needed);used.add(value);uniqueMap.set(field.name,used)}
+        if(field.prefix&&value!=null)value=field.prefix+value;if(field.suffix&&value!=null)value=String(value)+field.suffix;row[field.name]=value
+      }
+      for(const{gap,start}of scheduled){const valueIndex=offset-start;if(valueIndex<0||valueIndex>=gap.missingValues.length)continue;const field=table.fields.find(candidate=>candidate.id===gap.fieldId);if(!field)continue;if(gap.kind==='missing')delete row[field.name];else row[field.name]=gap.missingValues[valueIndex]}
+      table.fields.filter(field=>field.formula).forEach(field=>{row[field.name]=resolveFormula(field.formula!,row)})
+      table.fields.filter(field=>field.condition&&!matchesFieldCondition(field,row)).forEach(field=>{if(field.condition!.otherwise==='omit')delete row[field.name];else row[field.name]=null})
+      rows.push(row)
+    }
+    nextData[table.id]=rows;addedByTable[table.id]=needed
+  }
+  const nextProject={...project,tables:project.tables.map(table=>addedByTable[table.id]?{...table,count:(nextData[table.id]||[]).length}:table)}
+  return{project:nextProject,data:nextData,added:Object.values(addedByTable).reduce((sum,count)=>sum+count,0)}
 }
 
 export function regenerateDataRow(project:ProjectSchema,data:GeneratedData,tableId:string,rowIndex:number,pools:Record<string,string[]>={},lockedFields:string[]=[],nonce=Date.now()):DataRow {
