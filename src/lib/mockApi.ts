@@ -1,4 +1,5 @@
 import type { DataRow, GeneratedData, ProjectSchema, TableSchema } from '../types'
+import { ENUM_VALUES } from '../data/enumValues'
 import { toOpenAPI } from './schemaExport'
 import { normalizeMockApiOptionsForProject, type MockApiOptions } from './mockApiOptions'
 
@@ -48,6 +49,7 @@ export function mockApiConfig(project:ProjectSchema,options?:Partial<MockApiOpti
   failureRate: number
   failureStatus: number
   envelope: 'plain' | 'data' | 'data-meta'
+  validateSchema: boolean
   validateForeignKeys: boolean
   deletePolicy: 'restrict' | 'cascade'
   nestedRoutes: boolean
@@ -69,7 +71,8 @@ export function mockApiHandlers(project:ProjectSchema,data:GeneratedData,_option
   const initial=Object.fromEntries(project.tables.map(table=>[table.name,(data[table.id]??[]).map(clean)]))
   const definitions=project.tables.map(table=>{
     const key=primary(table)
-    return`  { resource: ${JSON.stringify(table.name)}, key: ${JSON.stringify(key.name)}, numericKey: ${key.dataType==='number'}, fields: ${JSON.stringify(table.fields.map(field=>field.name))} },`
+    const validation=table.fields.map(field=>{const source=field.values?.length?field.values:ENUM_VALUES[field.generator],values=source?.map(value=>field.dataType==='number'&&Number.isFinite(Number(value))?Number(value):field.dataType==='boolean'&&['true','false'].includes(String(value))?String(value)==='true':value);return{name:field.name,type:field.dataType==='date'?'string':field.dataType,required:field.name!==key.name&&(field.missing??0)===0&&(field.nullable??0)===0&&!field.condition,nullable:Boolean(field.nullable)||field.condition?.otherwise==='null',...(values?.length?{values}:{}),...(field.min!==undefined?{min:field.min}:{}),...(field.max!==undefined?{max:field.max}:{}),...(field.length!==undefined?{maxLength:field.length}:{})}})
+    return`  { resource: ${JSON.stringify(table.name)}, key: ${JSON.stringify(key.name)}, numericKey: ${key.dataType==='number'}, fields: ${JSON.stringify(table.fields.map(field=>field.name))}, validation: ${literal(validation)} },`
   }).join('\n')
   const relationDefinitions=relationSpecs(project).map(relation=>`  { child: ${JSON.stringify(relation.child)}, childField: ${JSON.stringify(relation.foreignKey)}, parent: ${JSON.stringify(relation.parent)}, parentField: ${JSON.stringify(relation.parentField)}, path: ${JSON.stringify(relation.path)} },`).join('\n')
   return `import { http, HttpResponse, type JsonBodyType } from 'msw'
@@ -77,7 +80,9 @@ import { mockApiOptions } from './config'
 
 type MockRecord = Record<string, unknown>
 type MockDatabase = Record<string, MockRecord[]>
-type ResourceDefinition = { resource: string; key: string; numericKey: boolean; fields: readonly string[] }
+type FieldValidation = { name: string; type: string; required: boolean; nullable: boolean; values?: unknown[]; min?: number; max?: number; maxLength?: number }
+type ResourceDefinition = { resource: string; key: string; numericKey: boolean; fields: readonly string[]; validation: readonly FieldValidation[] }
+type ValidationIssue = { field: string; rule: string; message: string }
 export type MockRequestLog = { id: string; sequence: number; method: string; path: string; status: number; latencyMs: number; injectedFailure: boolean; routeOverride?: string }
 export type MockSnapshotSummary = { name: string; revision: number; bytes: number; totalRows: number; rows: Record<string, number> }
 type StoredSnapshot = { summary: MockSnapshotSummary; database: MockDatabase }
@@ -134,6 +139,35 @@ const wrapped = (data: unknown, meta?: MockRecord): JsonBodyType => (
       : { data, meta: meta ?? {} }
 ) as JsonBodyType
 
+const validateBody = (body: MockRecord, resource: ResourceDefinition, partial: boolean): ValidationIssue | null => {
+  if (!mockApiOptions.validateSchema) return null
+  const unknown = Object.keys(body).find(field => !resource.fields.includes(field))
+  if (unknown) return { field: unknown, rule: 'unknown_field', message: 'Unknown field: ' + unknown }
+  if (partial && Object.prototype.hasOwnProperty.call(body, resource.key)) return { field: resource.key, rule: 'immutable', message: 'Primary key cannot be changed' }
+  for (const field of resource.validation) {
+    const value = body[field.name]
+    if (value === undefined) {
+      if (!partial && field.required) return { field: field.name, rule: 'required', message: 'Required field missing: ' + field.name }
+      continue
+    }
+    if (value === null) {
+      if (!field.nullable) return { field: field.name, rule: 'nullable', message: 'Field cannot be null: ' + field.name }
+      continue
+    }
+    const validType = field.type === 'object'
+      ? typeof value === 'object' && !Array.isArray(value)
+      : field.type === 'number'
+        ? typeof value === 'number' && Number.isFinite(value)
+        : typeof value === field.type
+    if (!validType) return { field: field.name, rule: 'type', message: 'Invalid type for field: ' + field.name }
+    if (field.values && !field.values.some(candidate => Object.is(candidate, value))) return { field: field.name, rule: 'enum', message: 'Invalid enum value for field: ' + field.name }
+    if (typeof value === 'number' && field.min !== undefined && value < field.min) return { field: field.name, rule: 'minimum', message: 'Field is below minimum: ' + field.name }
+    if (typeof value === 'number' && field.max !== undefined && value > field.max) return { field: field.name, rule: 'maximum', message: 'Field is above maximum: ' + field.name }
+    if (typeof value === 'string' && field.maxLength !== undefined && Array.from(value).length > field.maxLength) return { field: field.name, rule: 'max_length', message: 'Field is too long: ' + field.name }
+  }
+  return null
+}
+
 const invalidReference = (body: MockRecord, resource: ResourceDefinition) => {
   if (!mockApiOptions.validateForeignKeys) return null
   for (const relation of relations) {
@@ -143,8 +177,10 @@ const invalidReference = (body: MockRecord, resource: ResourceDefinition) => {
   }
   return null
 }
-type InsertResult = { ok: true; row: MockRecord } | { ok: false; status: number; message: string }
+type InsertResult = { ok: true; row: MockRecord } | { ok: false; status: number; message: string; details?: MockRecord }
 const insertRecord = (input: MockRecord, resource: ResourceDefinition): InsertResult => {
+  const issue = validateBody(input, resource, false)
+  if (issue) return { ok: false, status: 422, message: issue.message, details: issue }
   const body = allowedBody(input, resource)
   if (body[resource.key] == null) {
     body[resource.key] = resource.numericKey
@@ -308,13 +344,15 @@ export const handlers = resources.flatMap(resource => [
     const input = await jsonBody(request)
     if (!input) return errorResponse(400, 'JSON object required')
     const result = insertRecord(input, resource)
-    return result.ok ? HttpResponse.json(wrapped(result.row), { status: 201 }) : errorResponse(result.status, result.message)
+    return result.ok ? HttpResponse.json(wrapped(result.row), { status: 201 }) : errorResponse(result.status, result.message, result.details)
   })),
   http.patch('*/api/' + resource.resource + '/:id', ({ params, request }) => withNetwork(request, async () => {
     const index = db[resource.resource].findIndex(item => sameId(item[resource.key], params.id))
     const input = await jsonBody(request)
     if (index < 0) return errorResponse(404, 'Not found')
     if (!input) return errorResponse(400, 'JSON object required')
+    const issue = validateBody(input, resource, true)
+    if (issue) return errorResponse(422, issue.message, issue)
     const body = allowedBody(input, resource)
     const candidate = { ...db[resource.resource][index], ...body }
     const invalid = invalidReference(candidate, resource)
@@ -355,7 +393,7 @@ const batchHandlers = resources.flatMap(resource => [
       const result = insertRecord(input, resource)
       if (!result.ok) {
         db[resource.resource] = snapshot
-        return errorResponse(result.status, result.message, { index })
+        return errorResponse(result.status, result.message, { index, ...(result.details ?? {}) })
       }
       created.push(result.row)
     }
@@ -382,6 +420,11 @@ const batchHandlers = resources.flatMap(resource => [
       if (rowIndex < 0) {
         db[resource.resource] = snapshot
         return errorResponse(404, 'Record not found', { index })
+      }
+      const issue = validateBody(changes, resource, true)
+      if (issue) {
+        db[resource.resource] = snapshot
+        return errorResponse(422, issue.message, { index, ...issue })
       }
       const body = allowedBody(changes, resource), candidate = { ...db[resource.resource][rowIndex], ...body, [resource.key]: db[resource.resource][rowIndex][resource.key] }
       const invalid = invalidReference(candidate, resource)
@@ -494,9 +537,9 @@ const controlHandlers = [
     if (actions.length > TRANSACTION_LIMIT) return errorResponse(400, 'Transaction limit is 100 actions')
     if (root && Object.keys(root).some(field => field !== 'actions')) return errorResponse(400, 'Transaction object only accepts actions')
     const databaseSnapshot = structuredClone(db), aliases = new Map<string, MockRecord>(), results: Array<{ index: number; op: string; resource: string; row: MockRecord; alias?: string }> = []
-    const rollback = (status: number, message: string, index: number) => {
+    const rollback = (status: number, message: string, index: number, details?: MockRecord) => {
       for (const definition of resources) db[definition.resource] = databaseSnapshot[definition.resource]
-      return errorResponse(status, message, { index })
+      return errorResponse(status, message, { index, ...(details ?? {}) })
     }
     let activeIndex = 0
     try { for (let index = 0; index < actions.length; index++) {
@@ -515,7 +558,7 @@ const controlHandlers = [
         if (!resolved.ok) return rollback(400, resolved.message, index)
         if (!body) return rollback(400, 'Create action requires body object', index)
         const inserted = insertRecord(body, resource)
-        if (!inserted.ok) return rollback(inserted.status, inserted.message, index)
+        if (!inserted.ok) return rollback(inserted.status, inserted.message, index, inserted.details)
         row = inserted.row
       } else {
         const resolvedId = resolveTransactionValue(action.id, aliases)
@@ -527,6 +570,8 @@ const controlHandlers = [
           const resolved = resolveTransactionValue(action.changes, aliases), changes = resolved.ok ? asRecord(resolved.value) : null
           if (!resolved.ok) return rollback(400, resolved.message, index)
           if (!changes) return rollback(400, 'Update action requires changes object', index)
+          const issue = validateBody(changes, resource, true)
+          if (issue) return rollback(422, issue.message, index, issue)
           const candidate = { ...db[resource.resource][rowIndex], ...allowedBody(changes, resource), [resource.key]: db[resource.resource][rowIndex][resource.key] }
           const invalid = invalidReference(candidate, resource)
           if (invalid) return rollback(422, 'Foreign key not found: ' + invalid.childField + ' -> ' + invalid.parent + '.' + invalid.parentField, index)
@@ -563,6 +608,7 @@ export function mockApiReadme(project:ProjectSchema,options?:Partial<MockApiOpti
 - 延迟：${behavior.latencyMinMs}–${behavior.latencyMaxMs} ms
 - 失败率：${behavior.failureRate}%（HTTP ${behavior.failureStatus}）
 - 成功响应：${behavior.envelope==='plain'?'原始 JSON':behavior.envelope==='data'?'\`{ data }\`':'\`{ data, meta }\`'}
+- Schema 严格校验：${behavior.validateSchema?'开启，类型、必填、枚举、范围、长度和未知字段不合法时返回 HTTP 422':'关闭，未知字段按兼容模式静默丢弃'}
 - 外键校验：${behavior.validateForeignKeys?'开启，悬空外键返回 HTTP 422':'关闭'}
 - 父记录删除：${behavior.deletePolicy==='restrict'?'存在子记录时返回 HTTP 409':'递归级联删除全部后代'}
 - 嵌套查询：${behavior.nestedRoutes?`开启，共 ${nested.length} 条父子路由`:'关闭'}
@@ -633,14 +679,14 @@ ${routes.map(route=>`- \`GET ${route.list}?_page=1&_limit=20&_sort=${route.prima
 
 ${nested.length?`### 父子嵌套查询\n\n${nested.map(route=>`- \`GET ${route.path}\`（${route.parent} → ${route.child}.${route.foreignKey}）`).join('\n')}\n`:''}
 
-列表响应包含 \`X-Total-Count\`，业务响应包含稳定请求编号 \`X-Mock-Request-Id\` 和实际等待毫秒数 \`X-Mock-Latency\`，注入失败额外包含 \`X-Mock-Injected-Failure: true\`；单页最多 1,000 条。POST 自动补充缺失主键并拒绝重复主键，PATCH 不允许修改主键，请求中不属于当前 Schema 的字段会被丢弃。开启外键校验时，POST/PATCH 的悬空外键返回 422。批量新增接受 JSON 数组或 \`{ items: [] }\`，批量修改接受 \`[{ id, changes }]\`，批量删除接受 ID 数组或 \`{ ids: [] }\`；单批最多 1,000 条。任一条格式、主键、外键或引用策略失败都会整批不落库，并在错误中返回从 0 开始的 \`index\`。级联批量删除会在 \`meta.cascaded\` 返回额外清理的后代数量。
+列表响应包含 \`X-Total-Count\`，业务响应包含稳定请求编号 \`X-Mock-Request-Id\` 和实际等待毫秒数 \`X-Mock-Latency\`，注入失败额外包含 \`X-Mock-Injected-Failure: true\`；单页最多 1,000 条。POST 自动补充缺失主键并拒绝重复主键。严格 Schema 校验关闭时，未知字段被兼容性丢弃；开启后，未知字段、类型、必填、空值、枚举、范围、长度和 PATCH 主键修改均返回 422，并附带 \`field\` 与 \`rule\`。开启外键校验时，POST/PATCH 的悬空外键返回 422。批量新增接受 JSON 数组或 \`{ items: [] }\`，批量修改接受 \`[{ id, changes }]\`，批量删除接受 ID 数组或 \`{ ids: [] }\`；单批最多 1,000 条。任一条格式、Schema、主键、外键或引用策略失败都会整批不落库，并在错误中返回从 0 开始的 \`index\`。级联批量删除会在 \`meta.cascaded\` 返回额外清理的后代数量。
 
 ## 文件
 
 - \`db.json\`：可直接读取或交给 json-server 等兼容工具。
 - \`package.json\` / \`tsconfig.json\` / \`vitest.config.ts\`：独立可运行的测试工程配置，依赖使用精确版本。
 - \`handlers.test.ts\`：真实请求验证分页、CRUD、批量回滚、跨表事务、脱敏追踪、场景快照、控制接口、复位与关系策略。
-- \`config.ts\`：种子、延迟、失败率、失败状态码和响应格式。
+- \`config.ts\`：种子、延迟、失败率、失败状态码、响应格式与 Schema/关系校验开关。
 - \`handlers.ts\`：内存 CRUD、原子批量增改删、分页、搜索、字段筛选、排序与网络场景实现。
 - \`browser.ts\` / \`server.ts\`：浏览器和 Node 测试入口。
 - \`openapi.json\`：接口契约，可导入 Apifox、Postman 或 Swagger UI。
@@ -661,8 +707,8 @@ const origin = 'http://localhost'
 const unwrap = (body: unknown) => body && typeof body === 'object' && 'data' in body ? (body as { data: unknown }).data : body
 const configuredRouteOverrides = structuredClone(mockApiOptions.routeOverrides)
 
-beforeAll(() => { Object.assign(mockApiOptions, { latencyMinMs: 0, latencyMaxMs: 0, failureRate: 0, routeOverrides: [] }); server.listen({ onUnhandledRequest: 'error' }) })
-afterEach(() => { Object.assign(mockApiOptions, { latencyMinMs: 0, latencyMaxMs: 0, failureRate: 0, routeOverrides: [] }); server.resetHandlers(); resetMockData() })
+beforeAll(() => { Object.assign(mockApiOptions, { latencyMinMs: 0, latencyMaxMs: 0, failureRate: 0, validateSchema: false, routeOverrides: [] }); server.listen({ onUnhandledRequest: 'error' }) })
+afterEach(() => { Object.assign(mockApiOptions, { latencyMinMs: 0, latencyMaxMs: 0, failureRate: 0, validateSchema: false, routeOverrides: [] }); server.resetHandlers(); resetMockData() })
 afterAll(() => server.close())
 
 describe(${JSON.stringify(project.name+' Mock API')}, () => {
@@ -682,6 +728,21 @@ describe(${JSON.stringify(project.name+' Mock API')}, () => {
     expect((unwrap(await patchedResponse.json()) as Record<string, unknown>)[${JSON.stringify(firstPrimary.name)}]).toBe(id)
     expect((await fetch(origin + ${JSON.stringify(`/api/${first.name}/`)} + id, { method: 'DELETE' })).status).toBe(200)
     resetMockData(); expect(db[${JSON.stringify(first.name)}].some(row => String(row[${JSON.stringify(firstPrimary.name)}]) === String(id))).toBe(false)
+  })
+
+  it('严格模式按 Schema 拒绝非法字段并返回定位信息', async () => {
+    mockApiOptions.validateSchema = true
+    const original = db[${JSON.stringify(first.name)}][0], valid = { ...original }
+    delete valid[${JSON.stringify(firstPrimary.name)}]
+    const created = await fetch(origin + ${JSON.stringify(`/api/${first.name}`)}, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(valid) })
+    expect(created.status).toBe(201)
+    const invalid = await fetch(origin + ${JSON.stringify(`/api/${first.name}`)}, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...valid, __unexpected: true }) })
+    expect(invalid.status).toBe(422)
+    expect((await invalid.json() as { error: { field: string; rule: string } }).error).toMatchObject({ field: '__unexpected', rule: 'unknown_field' })
+    const id = (unwrap(await created.json()) as Record<string, unknown>)[${JSON.stringify(firstPrimary.name)}]
+    const immutable = await fetch(origin + ${JSON.stringify(`/api/${first.name}/`)} + id, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ${JSON.stringify(firstPrimary.name)}: id }) })
+    expect(immutable.status).toBe(422)
+    expect((await immutable.json() as { error: { rule: string } }).error.rule).toBe('immutable')
   })
 
   it('记录可筛选的脱敏请求轨迹并支持单独清空', async () => {

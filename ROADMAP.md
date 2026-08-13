@@ -68,6 +68,9 @@
 - [x] 批量删除 restrict/cascade 引用策略、级联数量、UI 路由场景与 OpenAPI 契约
 - [x] Mock API 受限 JSON 跨表原子事务与 create/update/delete 动作
 - [x] 事务安全别名引用、100 步/1 MiB/10 层限制、整库回滚与 OpenAPI 契约
+- [x] Mock API 可选严格 Schema 请求校验与网页/CLI 开关
+- [x] 未知字段、类型、必填、空值、枚举、数值范围、文本长度和不可变主键校验
+- [x] 单条、批量、跨表事务统一 422 field/rule/index 错误定位与 OpenAPI 契约
 
 ## 近期版本
 

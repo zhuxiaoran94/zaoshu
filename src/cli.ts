@@ -40,6 +40,7 @@ export function parseCliArgs(args:string[]):CliOptions {
     else if(flag==='--mock-api-failure-rate'){mockPatch(options,{failureRate:integer(needValue(args,index,flag),flag,0,100)});index++}
     else if(flag==='--mock-api-failure-status'){mockPatch(options,{failureStatus:integer(needValue(args,index,flag),flag,400,599)});index++}
     else if(flag==='--mock-api-envelope'){const value=needValue(args,index,flag);if(!['plain','data','data-meta'].includes(value))throw new Error('--mock-api-envelope 仅支持 plain, data, data-meta');mockPatch(options,{envelope:value as MockApiEnvelope});index++}
+    else if(flag==='--mock-api-strict-schema')mockPatch(options,{validateSchema:true})
     else if(flag==='--mock-api-delete'){const value=needValue(args,index,flag);if(!['restrict','cascade'].includes(value))throw new Error('--mock-api-delete 仅支持 restrict, cascade');mockPatch(options,{deletePolicy:value as MockApiDeletePolicy});index++}
     else if(flag==='--mock-api-no-fk-check')mockPatch(options,{validateForeignKeys:false})
     else if(flag==='--mock-api-no-nested')mockPatch(options,{nestedRoutes:false})
@@ -79,6 +80,7 @@ export const CLI_HELP=`Mock造数工具 CLI
   --mock-api-failure-rate <n>   Mock API 确定性失败率，0–100
   --mock-api-failure-status <n> 注入失败的 HTTP 状态码，400–599
   --mock-api-envelope <shape>   plain / data / data-meta
+  --mock-api-strict-schema      按 Schema 严格校验类型、必填、枚举、范围和长度
   --mock-api-delete <policy>    restrict / cascade，默认阻止删除有子记录的父记录
   --mock-api-no-fk-check        不校验 POST/PATCH 外键完整性
   --mock-api-no-nested          不生成父子嵌套查询路由
