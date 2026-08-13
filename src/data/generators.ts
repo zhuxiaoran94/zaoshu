@@ -33,7 +33,7 @@ const distributedDate=(rule:FieldRule,rowIndex:number,totalRows:number,from:stri
 
 export function generateValue(rule: FieldRule, rowIndex: number, pools: Record<string,string[]> = {}, context:GenerateValueContext = {}): unknown {
   const g = rule.generator
-  if (rule.fixedValue !== undefined && rule.fixedValue !== '') return rule.fixedValue
+  if (rule.fixedValue !== undefined && rule.fixedValue !== '') {if(rule.dataType==='object'){try{return JSON.parse(rule.fixedValue)}catch{return{}}}return rule.fixedValue}
   if (g === 'customEnum' && rule.values?.length) return context.mode==='realistic'?(rule.values[weightedIndex(rule.values.length,rule.weights)]):pick(rule.values, rowIndex)
   if (g === 'dataPool') {const values=pools[rule.fixedValue || ''] || ['未配置数据池'];return context.mode==='realistic'?values[weightedIndex(values.length,rule.weights)]:pick(values,rowIndex)}
   if (ENUM_VALUES[g]) {const values=ENUM_VALUES[g];if(context.mode==='realistic'&&(rule.weights?.length===values.length||rule.distribution==='hotspot'))return values[weightedIndex(values.length,rule.weights||[70,...Array(Math.max(0,values.length-1)).fill(30/Math.max(1,values.length-1))])];return pick(values,rowIndex)}

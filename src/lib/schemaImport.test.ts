@@ -53,4 +53,14 @@ describe('Schema 导入',()=>{
     await expect(importSchemaText('openapi: 3.0.3\nopenapi: 3.1.0')).rejects.toThrow(/解析|Map keys|键/)
     await expect(importSchemaText('payload: !!js/function "function(){ return 1 }"')).rejects.toThrow(/解析|tag/)
   })
+  it('展开 OpenAPI 本地 $ref 与 allOf，并保持对象数组类型',async()=>{
+    const input={openapi:'3.0.3',info:{title:'复用模型',version:'1'},components:{schemas:{Base:{type:'object',required:['id'],properties:{id:{type:'integer'},createdAt:{type:'string',format:'date-time'}}},User:{allOf:[{$ref:'#/components/schemas/Base'},{type:'object',required:['email'],properties:{email:{type:'string',format:'email'},roles:{type:'array',items:{type:'string'}}}}]},Order:{type:'object',properties:{id:{type:'integer'},userId:{type:'integer'},buyer:{$ref:'#/components/schemas/User'}}}}}}
+    const result=await importSchemaText(JSON.stringify(input)),users=result.project.tables.find(table=>table.name==='user')!,orders=result.project.tables.find(table=>table.name==='order')!
+    expect(users.fields.map(field=>field.name)).toEqual(expect.arrayContaining(['id','createdAt','email','roles']));expect(users.fields.find(field=>field.name==='email')?.missing).toBe(0);expect(users.fields.find(field=>field.name==='roles')).toMatchObject({dataType:'object',generator:'fixed',fixedValue:'[]'});expect(orders.fields.find(field=>field.name==='buyer')?.ref).toEqual({tableId:users.id,field:'id'});expect(orders.fields.find(field=>field.name==='userId')?.ref).toEqual({tableId:users.id,field:'id'})
+  })
+  it('拒绝外部或缺失 $ref，并对循环引用告警',async()=>{
+    const external={openapi:'3.0.3',components:{schemas:{Unsafe:{$ref:'https://example.com/schema.json'}}}};await expect(importSchemaText(JSON.stringify(external))).rejects.toThrow(/拒绝外部/)
+    const missing={openapi:'3.0.3',components:{schemas:{Broken:{$ref:'#/components/schemas/Missing'}}}};await expect(importSchemaText(JSON.stringify(missing))).rejects.toThrow(/目标不存在/)
+    const circular={openapi:'3.0.3',components:{schemas:{Node:{type:'object',properties:{child:{$ref:'#/components/schemas/Node'}}}}}};const result=await importSchemaText(JSON.stringify(circular));expect(result.warnings.some(warning=>warning.includes('循环'))).toBe(true)
+  })
 })
