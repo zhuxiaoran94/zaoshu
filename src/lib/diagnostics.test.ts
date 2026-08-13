@@ -42,4 +42,8 @@ describe('生成前约束诊断', () => {
     const ids=diagnoseProject(project).map(issue=>issue.id);expect(ids).toContain(`weights-length-${field.id}`);expect(ids).toContain(`distribution-center-${age.id}`)
     field.weights=[0,0,0];expect(diagnoseProject(project).map(issue=>issue.id)).toContain(`weights-zero-${field.id}`)
   })
+  it('发现公式语法错误、危险语法和自引用',()=>{
+    const project=cloneTemplate('commerce'),table=project.tables.find(candidate=>candidate.id==='products')!,field=table.fields.find(candidate=>candidate.name==='price')!;field.formula='price.constructor(1)';expect(diagnoseProject(project).some(issue=>issue.id===`formula-syntax-${field.id}`)).toBe(true)
+    field.formula='price + missing';expect(diagnoseProject(project).some(issue=>issue.id===`formula-${field.id}`)).toBe(true)
+  })
 })

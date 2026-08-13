@@ -1,6 +1,7 @@
 import type { ProjectSchema } from '../types'
 import { sortTables } from './modeling'
 import { ENUM_SIZES } from '../data/generatorCatalog'
+import { orderFormulaFields, validateFormula } from './formula'
 
 export interface DiagnosticIssue {
   id: string
@@ -46,12 +47,7 @@ export function diagnoseProject(project: ProjectSchema): DiagnosticIssue[] {
         const capacity = field.values?.length || LIMITED_ENUMS[field.generator]
         if (capacity !== undefined && table.count > capacity) issues.push({ id: `unique-${field.id}`, level: 'error', title: '唯一值空间不足', detail: `${table.label}.${field.label} 只有 ${capacity} 个候选值，却需要生成 ${table.count} 条唯一数据。`, tableId: table.id, fieldId: field.id, suggestion: '关闭唯一约束、增加候选值，或减少生成数量。' })
       }
-      if (field.formula) {
-        const expression = field.formula.replace(/"[^"]*"|'[^']*'/g, '')
-        const identifiers = [...expression.matchAll(/[A-Za-z_][A-Za-z0-9_]*/g)].map(match => match[0]).filter(identifier => !['round', 'min', 'max', 'length', 'true', 'false'].includes(identifier))
-        const missing = identifiers.filter(identifier => !table.fields.some(candidate => candidate.name === identifier))
-        if (missing.length) issues.push({ id: `formula-${field.id}`, level: 'error', title: '公式引用不存在字段', detail: `${table.label}.${field.label} 的公式引用了 ${[...new Set(missing)].join('、')}。`, tableId: table.id, fieldId: field.id, suggestion: '修正公式字段名，或先创建被引用字段。' })
-      }
+      if (field.formula) {try{const{missing}=validateFormula(field.formula,table.fields.filter(candidate=>candidate.id!==field.id).map(candidate=>candidate.name));if(missing.length)issues.push({ id: `formula-${field.id}`, level: 'error', title: '公式引用不存在字段', detail: `${table.label}.${field.label} 的公式引用了 ${[...new Set(missing)].join('、')}。`, tableId: table.id, fieldId: field.id, suggestion: '修正公式字段名，或先创建被引用字段。' })}catch(error){issues.push({id:`formula-syntax-${field.id}`,level:'error',title:'计算公式语法错误',detail:`${table.label}.${field.label}：${error instanceof Error?error.message:'无法解析公式'}`,tableId:table.id,fieldId:field.id,suggestion:'使用白名单运算符和函数，检查括号、引号及参数。'})}}
       if ((field.nullable || 0) + (field.missing || 0) > 100) issues.push({ id: `empty-rate-${field.id}`, level: 'warning', title: '空值比例可能超出预期', detail: `${table.label}.${field.label} 的空值率与缺失率之和超过 100%。`, tableId: table.id, fieldId: field.id, suggestion: '降低空值率或字段缺失率。' })
       if(field.weights){const expected=field.values?.length||ENUM_SIZES[field.generator];if(expected!==undefined&&field.weights.length!==expected)issues.push({id:`weights-length-${field.id}`,level:'error',title:'枚举权重数量不匹配',detail:`${table.label}.${field.label} 有 ${expected} 个候选值，但配置了 ${field.weights.length} 个权重。`,tableId:table.id,fieldId:field.id,suggestion:'为每个候选值配置一个对应权重。'});if(!field.weights.some(weight=>weight>0))issues.push({id:`weights-zero-${field.id}`,level:'error',title:'权重不能全部为零',detail:`${table.label}.${field.label} 的所有候选项权重均为 0。`,tableId:table.id,fieldId:field.id,suggestion:'至少将一个候选项权重设置为大于 0。'})}
       if(field.distributionCenter!==undefined&&field.dataType==='number'&&((field.min!==undefined&&field.distributionCenter<field.min)||(field.max!==undefined&&field.distributionCenter>field.max)))issues.push({id:`distribution-center-${field.id}`,level:'warning',title:'分布中心超出数值范围',detail:`${table.label}.${field.label} 的分布中心 ${field.distributionCenter} 不在配置范围内。`,tableId:table.id,fieldId:field.id,suggestion:'将分布中心调整到最小值和最大值之间。'})
@@ -61,6 +57,7 @@ export function diagnoseProject(project: ProjectSchema): DiagnosticIssue[] {
         if (!['empty', 'notEmpty'].includes(rule.operator) && !rule.value?.trim()) issues.push({ id: `condition-value-${field.id}-${index}`, level: 'warning', title: '条件比较值为空', detail: `${table.label}.${field.label} 的第 ${index + 1} 条条件没有比较值。`, tableId: table.id, fieldId: field.id, suggestion: '填写比较值；判断空值请改用“为空”或“不为空”。' })
       })
     })
+    try{orderFormulaFields(table.fields)}catch(error){issues.push({id:`formula-cycle-${table.id}`,level:'error',title:'计算字段循环依赖',detail:`${table.label}：${error instanceof Error?error.message:'计算字段无法排序'}`,tableId:table.id,suggestion:'移除其中一条计算字段引用，使依赖形成单向链。'})}
   })
   tableNames.forEach((count, name) => {
     if (count > 1) issues.push({ id: `duplicate-table-${name}`, level: 'error', title: '数据表名称重复', detail: `存在 ${count} 张名为 ${name} 的数据表，SQL 导出会发生冲突。`, suggestion: '为每张数据表设置不同的英文名称。' })

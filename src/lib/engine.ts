@@ -2,6 +2,7 @@ import type { ConditionOperator, CoverageGap, DataMode, DataRow, FieldRule, Gene
 import { generateValue, reseed } from '../data/generators'
 import { sortTables, validate } from './modeling'
 import { analyzeCoverage, coveragePercentage } from './coverage'
+import { evaluateFormula, orderFormulaFields } from './formula'
 export { refreshGeneratedResult, sortTables, validate } from './modeling'
 
 function hash(value:string) { let h=2166136261; for(const c of value) { h ^= c.charCodeAt(0); h=Math.imul(h,16777619) } return h>>>0 }
@@ -34,15 +35,6 @@ function mutate(row:DataRow,field:FieldRule,index:number) {
   else if(mutation.name==='special_chars') row[field.name]=`' OR 1=1 -- <script>alert(1)</script>`
   else row[field.name]=null
   row._mock_meta={field:field.name,rule:field.generator,mutation:mutation.name,expected:mutation.expected}
-}
-
-function resolveFormula(formula:string,row:DataRow):unknown {
-  const expression=formula.trim()
-  const round=expression.match(/^round\((\w+)\s*\*\s*(\w+)(?:\s*-\s*(\w+))?,\s*(\d)\)$/)
-  if(round) { const value=Number(row[round[1]])*Number(row[round[2]])-(round[3]?Number(row[round[3]]):0); return Number(value.toFixed(Number(round[4]))) }
-  const concat=expression.split('+').map(x=>x.trim())
-  if(concat.length>1) return concat.map(x=>String(row[x]??x.replace(/^['"]|['"]$/g,''))).join('')
-  return row[expression] ?? null
 }
 
 function compareCondition(left: unknown, operator: ConditionOperator, right = '') {
@@ -92,7 +84,7 @@ export function generateProject(project:ProjectSchema,pools:Record<string,string
         if(field.suffix&&value!=null) value=String(value)+field.suffix
         row[field.name]=value
       }
-      table.fields.filter(f=>f.formula).forEach(f=>{row[f.name]=resolveFormula(f.formula!,row)})
+      orderFormulaFields(table.fields).forEach(f=>{row[f.name]=evaluateFormula(f.formula!,row)})
       table.fields.filter(f=>f.condition&&!matchesFieldCondition(f,row)).forEach(f=>{if(f.condition!.otherwise==='omit')delete row[f.name];else row[f.name]=null})
       if(project.mode==='exception' && (i%5===0 || table.fields.some(f=>f.abnormal && random()*100<f.abnormal))) {
         const target=table.fields.filter(f=>!f.primaryKey)[i%Math.max(1,table.fields.filter(f=>!f.primaryKey).length)]??table.fields[0]
@@ -133,7 +125,7 @@ export function supplementCoverageGaps(project:ProjectSchema,data:GeneratedData,
         if(field.prefix&&value!=null)value=field.prefix+value;if(field.suffix&&value!=null)value=String(value)+field.suffix;row[field.name]=value
       }
       for(const{gap,start}of scheduled){const valueIndex=offset-start;if(valueIndex<0||valueIndex>=gap.missingValues.length)continue;const field=table.fields.find(candidate=>candidate.id===gap.fieldId);if(!field)continue;if(gap.kind==='missing')delete row[field.name];else row[field.name]=gap.missingValues[valueIndex]}
-      table.fields.filter(field=>field.formula).forEach(field=>{row[field.name]=resolveFormula(field.formula!,row)})
+      orderFormulaFields(table.fields).forEach(field=>{row[field.name]=evaluateFormula(field.formula!,row)})
       table.fields.filter(field=>field.condition&&!matchesFieldCondition(field,row)).forEach(field=>{if(field.condition!.otherwise==='omit')delete row[field.name];else row[field.name]=null})
       rows.push(row)
     }
@@ -156,7 +148,7 @@ export function regenerateDataRow(project:ProjectSchema,data:GeneratedData,table
     if(field.unique){const used=new Set((data[tableId]||[]).filter((_,index)=>index!==rowIndex).map(candidate=>candidate[field.name]));let tries=0;while(used.has(value)&&tries++<100)value=modeValue(field,rowIndex+nonce%10_000+tries+hash(field.id),project.mode,pools,table.count)}
     if(field.prefix&&value!=null)value=field.prefix+value;if(field.suffix&&value!=null)value=String(value)+field.suffix;row[field.name]=value
   }
-  table.fields.filter(field=>field.formula&&!locked.has(field.name)).forEach(field=>{row[field.name]=resolveFormula(field.formula!,row)})
+  orderFormulaFields(table.fields).filter(field=>!locked.has(field.name)).forEach(field=>{row[field.name]=evaluateFormula(field.formula!,row)})
   table.fields.filter(field=>field.condition&&!matchesFieldCondition(field,row)&&!locked.has(field.name)).forEach(field=>{if(field.condition!.otherwise==='omit')delete row[field.name];else row[field.name]=null})
   if(project.mode==='exception'){const candidates=table.fields.filter(field=>!field.primaryKey&&!locked.has(field.name));if(candidates.length)mutate(row,candidates[rowIndex%candidates.length],rowIndex)}
   return row
