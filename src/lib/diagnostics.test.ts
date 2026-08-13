@@ -46,4 +46,12 @@ describe('生成前约束诊断', () => {
     const project=cloneTemplate('commerce'),table=project.tables.find(candidate=>candidate.id==='products')!,field=table.fields.find(candidate=>candidate.name==='price')!;field.formula='price.constructor(1)';expect(diagnoseProject(project).some(issue=>issue.id===`formula-syntax-${field.id}`)).toBe(true)
     field.formula='price + missing';expect(diagnoseProject(project).some(issue=>issue.id===`formula-${field.id}`)).toBe(true)
   })
+  it('严格一对一在父表容量不足或允许留空时阻止生成',()=>{
+    const project=cloneTemplate('commerce'),users=project.tables.find(table=>table.id==='users')!,orders=project.tables.find(table=>table.id==='orders')!,field=orders.fields.find(candidate=>candidate.name==='userId')!
+    users.count=2;orders.count=3;field.ref={tableId:'users',field:'id',strategy:'oneToOne'};field.nullable=5
+    const ids=diagnoseProject(project).map(issue=>issue.id)
+    expect(ids).toContain(`ref-capacity-${field.id}`);expect(ids).toContain(`ref-one-null-${field.id}`)
+    field.condition={combinator:'and',rules:[{field:'status',operator:'equals',value:'已支付'}],otherwise:'null'};field.prefix='X-'
+    const conflictIds=diagnoseProject(project).map(issue=>issue.id);expect(conflictIds).toContain(`ref-one-condition-${field.id}`);expect(conflictIds).toContain(`ref-transform-${field.id}`)
+  })
 })

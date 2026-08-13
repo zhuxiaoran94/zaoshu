@@ -18,6 +18,14 @@ export interface FieldCondition {
 }
 
 export type DistributionType = 'uniform' | 'normal' | 'longTail' | 'hotspot' | 'ascending' | 'descending'
+export type ReferenceStrategy = 'random' | 'roundRobin' | 'hotspot' | 'oneToOne'
+
+export interface FieldReference {
+  tableId: string
+  field: string
+  strategy?: ReferenceStrategy
+  hotspotPercent?: number
+}
 
 export interface FieldRule {
   id: string
@@ -39,7 +47,7 @@ export interface FieldRule {
   abnormal?: number
   unique?: boolean
   primaryKey?: boolean
-  ref?: { tableId: string; field: string }
+  ref?: FieldReference
   formula?: string
   format?: string
   condition?: FieldCondition

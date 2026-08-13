@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { cloneTemplate } from '../data/templates'
-import { generateProject, matchesFieldCondition, regenerateDataRow } from './engine'
+import { generateProject, matchesFieldCondition, regenerateDataRow, supplementCoverageGaps } from './engine'
 import { refreshGeneratedResult, sortTables } from './modeling'
 import { analyzePairwiseCoverage, generatePairwise, generateStateEvents, parsePairwiseRules } from './labs'
 import { createExportPackage, createZip, neutralizeSpreadsheetFormula, sha256Fallback, toCSV, toSQL, toXLSX, toXML, toYAML } from './exporters'
@@ -21,6 +21,23 @@ describe('Mock造数引擎',()=>{
     expect(data.orders.every(r=>userIds.has(r.userId))).toBe(true)
     const orderIds=new Set(data.orders.map(r=>r.id))
     expect(data.order_items.every(r=>orderIds.has(r.orderId))).toBe(true)
+  })
+  it('外键支持均匀、热点和严格一对一策略并保持可复现',()=>{
+    const project=cloneTemplate('commerce'),users=project.tables.find(table=>table.id==='users')!,orders=project.tables.find(table=>table.id==='orders')!,userId=orders.fields.find(field=>field.name==='userId')!
+    users.count=5;orders.count=12;project.tables.filter(table=>!['users','orders'].includes(table.id)).forEach(table=>table.count=1)
+    userId.ref={tableId:'users',field:'id',strategy:'roundRobin'}
+    let first=generateProject(project).data,counts=users.count?first.users.map(parent=>first.orders.filter(row=>row.userId===parent.id).length):[]
+    expect(counts).toEqual([3,3,2,2,2]);expect(first.orders.map(row=>row.userId)).toEqual(generateProject(project).data.orders.map(row=>row.userId))
+    userId.ref.strategy='hotspot';userId.ref.hotspotPercent=20;orders.count=1000;first=generateProject(project).data;const hotId=first.users[0].id,hotCount=first.orders.filter(row=>row.userId===hotId).length
+    expect(hotCount).toBeGreaterThan(700);expect(first.orders.map(row=>row.userId)).toEqual(generateProject(project).data.orders.map(row=>row.userId))
+    userId.ref.strategy='oneToOne';orders.count=5;const oneToOne=generateProject(project);first=oneToOne.data
+    expect(new Set(first.orders.map(row=>row.userId)).size).toBe(5);expect(oneToOne.report.checks.find(check=>check.id===`fk-one-${userId.id}`)?.status).toBe('pass')
+  })
+  it('覆盖补数不会撑破严格一对一的父表容量',()=>{
+    const project=cloneTemplate('commerce'),users=project.tables.find(table=>table.id==='users')!,orders=project.tables.find(table=>table.id==='orders')!,field=orders.fields.find(candidate=>candidate.name==='userId')!
+    users.count=2;orders.count=2;field.ref={tableId:'users',field:'id',strategy:'oneToOne'};field.unique=true
+    const result=generateProject(project),gap={id:'g',kind:'boundary' as const,tableId:'orders',fieldId:orders.fields.find(candidate=>candidate.name==='amount')!.id,label:'金额边界',detail:'补齐',missingValues:[0]}
+    expect(()=>supplementCoverageGaps(project,result.data,{},[gap])).toThrow(/唯一引用容量不足/)
   })
   it('异常模式包含可追溯元数据',()=>{
     const project=cloneTemplate('users');project.mode='exception';project.tables.forEach(t=>t.count=10)

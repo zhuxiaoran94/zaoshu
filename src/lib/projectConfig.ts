@@ -9,6 +9,8 @@ export const MAX_CONFIG_BYTES = 1024 * 1024
 const refSchema = z.object({
   tableId: z.string().min(1).max(80),
   field: z.string().min(1).max(80),
+  strategy: z.enum(['random', 'roundRobin', 'hotspot', 'oneToOne']).optional(),
+  hotspotPercent: z.number().int().min(1).max(50).optional(),
 })
 
 const conditionSchema = z.object({
