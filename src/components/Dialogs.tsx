@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import Papa from 'papaparse'
-import { BookmarkPlus, Download, FileJson, GitCompareArrows, HardDriveDownload, Layers3, RefreshCcw, RotateCcw, Trash2, Upload, X } from './Icons'
+import { AlertTriangle, BookmarkPlus, Download, FileJson, GitCompareArrows, HardDriveDownload, Layers3, RefreshCcw, RotateCcw, Trash2, Upload, X } from './Icons'
 import { useAppStore } from '../store'
 import { exportData } from '../lib/exporters'
 import { cloneTemplate } from '../data/templates'
 import { MAX_CONFIG_BYTES, parseProjectFile, safeProjectFilename, serializeProject } from '../lib/projectConfig'
 import { createSnapshot, diffProjects, MAX_SNAPSHOTS, snapshotStore, type ProjectSnapshot } from '../lib/snapshots'
+import { importSchemaText, type ImportPreview } from '../lib/schemaImport'
 
 export function ExportDialog({open,onClose}:{open:boolean;onClose:()=>void}) {
   const s=useAppStore();const [format,setFormat]=useState('json');if(!open)return null
@@ -19,6 +20,27 @@ export function PoolDialog({open,onClose}:{open:boolean;onClose:()=>void}) {
   const add=()=>{const values=[...new Set(text.split(/[\n,]/).map(x=>x.trim()).filter(Boolean))];if(!name.trim())return setError('请输入数据池名称');if(!values.length)return setError('请至少输入一个候选值');if(values.length>10_000)return setError('单个数据池最多保存 10,000 个候选值');if(pools.some(pool=>pool.name===name.trim()))return setError('数据池名称不能重复');setPools([...pools,{id:`pool_${Date.now()}`,name:name.trim().slice(0,80),values:values.map(value=>value.slice(0,2_000)),createdAt:new Date().toISOString()}]);setName('');setText('');setError('')}
   const parseFile=(file:File)=>{setError('');if(file.size>MAX_CONFIG_BYTES)return setError('导入文件不能超过 1 MB');const reader=new FileReader();reader.onload=()=>{const raw=String(reader.result||'');if(file.name.toLowerCase().endsWith('.json')){try{const j=JSON.parse(raw);if(!Array.isArray(j))throw new Error();setText(j.slice(0,10_000).map(x=>typeof x==='object'?JSON.stringify(x):String(x)).join('\n'))}catch{setError('JSON 数据池必须是数组')}}else if(file.name.toLowerCase().endsWith('.csv')){const r=Papa.parse<string[]>(raw,{skipEmptyLines:true});setText(r.data.slice(0,10_000).map(row=>row[0]).filter(Boolean).join('\n'))}else setText(raw.slice(0,MAX_CONFIG_BYTES))};reader.readAsText(file)}
   return <div className="modal-backdrop" onMouseDown={e=>e.target===e.currentTarget&&onClose()}><section className="modal pool-modal"><header><div><span>LOCAL DATA POOL</span><h2>自定义数据池</h2><p>内置数据无需导入；这里只保存你的业务枚举。</p></div><button className="icon-button" onClick={onClose}><X/></button></header><div className="pool-form"><label>数据池名称<input value={name} maxLength={80} onChange={e=>setName(e.target.value)} placeholder="例如：渠道编码"/></label><label>候选值<textarea rows={7} maxLength={MAX_CONFIG_BYTES} value={text} onChange={e=>setText(e.target.value)} placeholder="每行一个值，也支持逗号分隔"/></label>{error&&<div className="form-error">{error}</div>}<div className="pool-actions"><input ref={input} hidden type="file" accept=".txt,.csv,.json" onChange={e=>e.target.files?.[0]&&parseFile(e.target.files[0])}/><button className="button ghost" onClick={()=>input.current?.click()}><Upload/>读取 TXT / CSV / JSON</button><button className="button primary" onClick={add}><Layers3/>保存数据池</button></div></div>{pools.length>0&&<div className="saved-pools"><h3>已保存</h3>{pools.map(p=><article key={p.id}><div><strong>{p.name}</strong><span>{p.values.length} 个值 · {p.values.slice(0,3).join('、')}</span></div><button className="icon-button danger" onClick={()=>setPools(pools.filter(x=>x.id!==p.id))}><X/></button></article>)}</div>}</section></div>
+}
+
+const OPENAPI_SAMPLE=`{
+  "openapi": "3.0.3",
+  "info": { "title": "订单服务", "version": "1.0" },
+  "components": { "schemas": {
+    "User": { "type": "object", "required": ["id", "email"], "properties": {
+      "id": { "type": "integer" }, "email": { "type": "string", "format": "email" }, "status": { "type": "string", "enum": ["正常", "冻结"] }
+    }},
+    "Order": { "type": "object", "required": ["id", "userId"], "properties": {
+      "id": { "type": "integer" }, "userId": { "type": "integer" }, "amount": { "type": "number", "minimum": 0 }, "createdAt": { "type": "string", "format": "date-time" }
+    }}
+  }}
+}`
+
+export function SchemaImportDialog({open,onClose}:{open:boolean;onClose:()=>void}) {
+  const setProject=useAppStore(state=>state.setProject),input=useRef<HTMLInputElement>(null);const[text,setText]=useState(OPENAPI_SAMPLE),[preview,setPreview]=useState<ImportPreview|null>(null),[error,setError]=useState('');if(!open)return null
+  const analyze=()=>{try{setPreview(importSchemaText(text));setError('')}catch(reason){setPreview(null);setError(reason instanceof Error?reason.message:'Schema 解析失败')}}
+  const read=(file:File)=>{setError('');setPreview(null);if(file.size>MAX_CONFIG_BYTES)return setError('Schema 文件不能超过 1 MB');const reader=new FileReader();reader.onload=()=>setText(String(reader.result||''));reader.readAsText(file)}
+  const apply=()=>{if(!preview)return;setProject(preview.project);onClose()}
+  return <div className="modal-backdrop" onMouseDown={event=>event.target===event.currentTarget&&onClose()}><section className="modal schema-modal"><header><div><span>SCHEMA IMPORT</span><h2>从 Schema 建立项目</h2><p>可选能力：内置模板无需导入。支持 OpenAPI 3 JSON 和普通 JSON 对象/数组。</p></div><button className="icon-button" onClick={onClose}><X/></button></header><div className="schema-input"><div className="schema-input-head"><span>粘贴 JSON，或读取本地文件</span><input hidden ref={input} type="file" accept=".json,application/json" onChange={event=>event.target.files?.[0]&&read(event.target.files[0])}/><button className="button ghost" onClick={()=>input.current?.click()}><Upload/>读取 JSON</button></div><textarea maxLength={MAX_CONFIG_BYTES} spellCheck={false} value={text} onChange={event=>{setText(event.target.value);setPreview(null)}}/><button className="button primary" onClick={analyze}><GitCompareArrows/>分析结构</button></div>{error&&<div className="dialog-message error">{error}</div>}{preview&&<div className="schema-preview"><header><div><strong>{preview.project.name}</strong><span>{preview.source==='openapi'?'OpenAPI 3.x':'JSON 样例'} · 本地解析</span></div><b>{preview.project.tables.length} 表 · {preview.project.tables.reduce((sum,table)=>sum+table.fields.length,0)} 字段</b></header><div>{preview.project.tables.map(table=><article key={table.id}><div><strong>{table.label}</strong><code>{table.name}</code></div><span>{table.count} 条</span><span>{table.fields.length} 字段</span><small>{table.fields.slice(0,5).map(field=>field.name).join('、')}{table.fields.length>5?'…':''}</small></article>)}</div>{preview.warnings.map(warning=><p key={warning}><AlertTriangle/>{warning}</p>)}</div>}<footer><span className="privacy-note">文件仅在浏览器本地读取，不上传服务器</span><button className="button ghost" onClick={onClose}>取消</button><button className="button primary" disabled={!preview} onClick={apply}>使用此结构</button></footer></section></div>
 }
 
 const downloadText=(text:string,name:string)=>{const url=URL.createObjectURL(new Blob([text],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}

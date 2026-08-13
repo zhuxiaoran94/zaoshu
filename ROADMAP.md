@@ -19,6 +19,8 @@
 - [x] 命名项目快照和版本差异查看
 - [x] 字段统计、锁定字段和单行重生成
 - [x] 结果编辑后自动重跑质量检查
+- [x] OpenAPI 3.x JSON Schema 导入
+- [x] JSON 样例结构与多数组推断
 
 ## 近期版本
 
@@ -30,9 +32,9 @@
 
 ## 后续探索
 
-- [ ] OpenAPI 3.x Schema 导入
+- [ ] OpenAPI 3.x YAML 与本地 `$ref` 解析
 - [ ] SQL DDL Schema 导入
-- [ ] JSON / TypeScript 类型推断
+- [ ] TypeScript 类型推断
 - [ ] Web Streams 真正流式导出百万级数据
 - [ ] 可选的只读分享链接（不包含真实数据）
 - [ ] CLI 与 CI 接入
