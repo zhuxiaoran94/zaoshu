@@ -2,7 +2,7 @@
 
 面向测试人员的浏览器端测试数据工作台。内置 120+ 字段生成类型和用户、电商、金融、游戏、社区、物流、测试通用七类场景，无需上传任何数据即可生成多表关联测试数据。
 
-当前版本：**4.6.0 网络场景版**。网站没有匿名写入接口，访客的数据与配置仅保存在各自浏览器中。
+当前版本：**4.7.0 关系接口版**。网站没有匿名写入接口，访客的数据与配置仅保存在各自浏览器中。
 
 ## 功能
 
@@ -143,6 +143,11 @@
 - `config.ts`、`routes.json`、OpenAPI 3.1 与 Manifest 保存同一份网络行为，交付后仍可追溯本次 Mock 条件
 - OpenAPI 响应模型跟随原始 JSON、`{ data }` 或 `{ data, meta }` 选择变化，并声明分页元信息、失败响应和 Mock 响应头
 - 网络场景面板与生成逻辑按需加载，首屏仍保持在 450 KB 发布预算内
+- Mock API 写入可按 Schema 自动校验外键，POST/PATCH 使用不存在的父记录时返回 422，避免联调数据静默失真
+- 父记录删除默认采用安全的 restrict 策略，有子记录时返回 409；需要清理整条业务链时可显式选择递归 cascade
+- 每条外键自动生成 `GET /api/父表/:id/子表` 嵌套查询；同一父子表存在多个外键时使用 `by-字段名` 生成无冲突路径
+- 嵌套路由、422/409 响应和删除语义完整写入 OpenAPI、路由清单与 README，使用者无需猜测关系行为
+- 关系策略支持网页开关和 CLI 参数；默认启用外键检查与嵌套路由、默认阻止误删，公开工具不会替用户选择破坏性级联
 
 完整版本记录见 [CHANGELOG.md](./CHANGELOG.md)，已实现与待实现功能见 [ROADMAP.md](./ROADMAP.md)。
 
@@ -215,6 +220,16 @@ npm run mock -- --template commerce --seed 42 --format mock-api \
   --mock-api-envelope data-meta \
   --output artifacts/commerce-network-mock.zip
 ```
+
+需要在测试清理时级联删除整条业务链：
+
+```bash
+npm run mock -- --template commerce --format mock-api \
+  --mock-api-delete cascade \
+  --output artifacts/commerce-cascade-mock.zip
+```
+
+默认使用 `restrict`；也可用 `--mock-api-no-fk-check` 或 `--mock-api-no-nested` 关闭对应能力。
 
 解压后安装 `msw`，浏览器入口调用 `startMockApi()`，Node/Vitest 使用导出的 `server`；详细路由与接入代码在包内 `mock-api/README.md`。
 

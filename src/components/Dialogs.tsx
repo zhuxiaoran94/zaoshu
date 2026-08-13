@@ -12,7 +12,7 @@ import { createShareUrl } from '../lib/share'
 import type { MockApiOptions } from '../lib/mockApiOptions'
 
 const MockApiOptionsForm=lazy(()=>import('./MockApiOptionsForm'))
-const DEFAULT_MOCK_API_OPTIONS:MockApiOptions={latencyMinMs:0,latencyMaxMs:0,failureRate:0,failureStatus:503,envelope:'plain'}
+const DEFAULT_MOCK_API_OPTIONS:MockApiOptions={latencyMinMs:0,latencyMaxMs:0,failureRate:0,failureStatus:503,envelope:'plain',validateForeignKeys:true,deletePolicy:'restrict',nestedRoutes:true}
 
 export function ExportDialog({open,onClose}:{open:boolean;onClose:()=>void}) {
   const s=useAppStore();const [format,setFormat]=useState('json');const [mockApi,setMockApi]=useState(DEFAULT_MOCK_API_OPTIONS);useEffect(()=>{if(open&&!s.result)setFormat('schema')},[open,s.result]);if(!open)return null

@@ -339,9 +339,12 @@
 .mock-api-options strong { color: var(--blue); font-size: 10px; }
 .mock-api-options span { margin-top: 2px; color: var(--muted); font-size: 8px; }
 .mock-api-options .button { height: 28px; padding: 0 9px; font-size: 9px; }
-.mock-api-options > div { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; }
+.mock-api-options > div { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; }
 .mock-api-options label { display: flex; flex-direction: column; gap: 4px; color: #586f7c; font-size: 8px; }
 .mock-api-options input,.mock-api-options select { width: 100%; min-width: 0; border: 1px solid #bfd3da; border-radius: 6px; background: white; padding: 7px; color: var(--ink); font: 9px ui-monospace, monospace; }
+.mock-api-options .mock-api-check { flex-direction: row; align-items: center; align-self: end; min-height: 31px; border: 1px solid #bfd3da; border-radius: 6px; background: white; padding: 7px; }
+.mock-api-options .mock-api-check input { width: auto; accent-color: var(--teal); }
+.mock-api-options .mock-api-check span { margin: 0; color: var(--ink); }
 @media (max-width: 680px) { .mock-api-options > div { grid-template-columns: 1fr 1fr; } }
 
 .coverage-head { display: flex !important; justify-content: space-between; align-items: center !important; }

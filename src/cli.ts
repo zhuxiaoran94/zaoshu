@@ -10,7 +10,7 @@ import { MAX_CONFIG_BYTES, parseProjectFile, serializeProject } from './lib/proj
 import { createSchemaContractPackage } from './lib/schemaExport'
 import type { DataMode, ProjectSchema } from './types'
 import { plannedProjectTotal } from './lib/cardinality'
-import { normalizeMockApiOptions, type MockApiEnvelope, type MockApiOptions } from './lib/mockApiOptions'
+import { normalizeMockApiOptions, type MockApiDeletePolicy, type MockApiEnvelope, type MockApiOptions } from './lib/mockApiOptions'
 
 const FORMATS=['schema','mock-api','bundle','json','jsonl','csv','tsv','yaml','xml','xlsx','mysql','postgres','sqlite','postman','playwright','cypress','jest','pytest','junit','markdown'] as const
 const MODES=['random','realistic','boundary','exception','pairwise'] as const
@@ -39,6 +39,9 @@ export function parseCliArgs(args:string[]):CliOptions {
     else if(flag==='--mock-api-failure-rate'){mockPatch(options,{failureRate:integer(needValue(args,index,flag),flag,0,100)});index++}
     else if(flag==='--mock-api-failure-status'){mockPatch(options,{failureStatus:integer(needValue(args,index,flag),flag,400,599)});index++}
     else if(flag==='--mock-api-envelope'){const value=needValue(args,index,flag);if(!['plain','data','data-meta'].includes(value))throw new Error('--mock-api-envelope 仅支持 plain, data, data-meta');mockPatch(options,{envelope:value as MockApiEnvelope});index++}
+    else if(flag==='--mock-api-delete'){const value=needValue(args,index,flag);if(!['restrict','cascade'].includes(value))throw new Error('--mock-api-delete 仅支持 restrict, cascade');mockPatch(options,{deletePolicy:value as MockApiDeletePolicy});index++}
+    else if(flag==='--mock-api-no-fk-check')mockPatch(options,{validateForeignKeys:false})
+    else if(flag==='--mock-api-no-nested')mockPatch(options,{nestedRoutes:false})
     else if(flag==='--output'){options.output=needValue(args,index,flag);index++}
     else if(flag==='--summary'){options.summary=needValue(args,index,flag);index++}
     else if(flag==='--force')options.force=true
@@ -74,6 +77,9 @@ export const CLI_HELP=`Mock造数工具 CLI
   --mock-api-failure-rate <n>   Mock API 确定性失败率，0–100
   --mock-api-failure-status <n> 注入失败的 HTTP 状态码，400–599
   --mock-api-envelope <shape>   plain / data / data-meta
+  --mock-api-delete <policy>    restrict / cascade，默认阻止删除有子记录的父记录
+  --mock-api-no-fk-check        不校验 POST/PATCH 外键完整性
+  --mock-api-no-nested          不生成父子嵌套查询路由
   --output <file>       输出 ZIP 路径；默认当前目录下的安全文件名
   --summary <file>      额外写入机器可读 JSON 摘要
   --fail-on-quality     存在非预期质量失败时以退出码 2 结束
