@@ -146,6 +146,34 @@ const wrapped = (data: unknown, meta?: MockRecord): JsonBodyType => (
       : { data, meta: meta ?? {} }
 ) as JsonBodyType
 
+const rowEtag = (row: MockRecord) => {
+  const value = JSON.stringify(row)
+  let first = 2166136261, second = 2246822519
+  for (let index = 0; index < value.length; index++) { const code = value.charCodeAt(index); first = Math.imul(first ^ code, 16777619); second = Math.imul(second ^ code, 3266489917) }
+  return '"mock-' + (first >>> 0).toString(16).padStart(8, '0') + (second >>> 0).toString(16).padStart(8, '0') + '-' + value.length.toString(16) + '"'
+}
+const etagResponse = (row: MockRecord, status = 200) => HttpResponse.json(wrapped(row), { status, headers: { ETag: rowEtag(row) } })
+const preconditionResponse = (row: MockRecord, details?: MockRecord) => {
+  const currentEtag = rowEtag(row)
+  return HttpResponse.json({ error: { status: 412, message: 'ETag precondition failed', currentEtag, ...(details ?? {}) } }, { status: 412, headers: { ETag: currentEtag } })
+}
+const ifMatchError = (value: unknown, row: MockRecord, details?: MockRecord) => {
+  if (value === undefined) return null
+  if (typeof value !== 'string' || value.length > 512) return errorResponse(400, 'If-Match must be a valid ETag under 512 characters', details)
+  const currentEtag = rowEtag(row), candidates = value.split(',').map(candidate => candidate.trim())
+  if (candidates.includes('*') || candidates.includes(currentEtag)) return null
+  return preconditionResponse(row, details)
+}
+const readWithEtag = (request: Request, row: MockRecord) => {
+  const etag = rowEtag(row), value = request.headers.get('If-None-Match')
+  if (value !== null) {
+    if (value.length > 512) return errorResponse(400, 'If-None-Match must be under 512 characters')
+    const candidates = value.split(',').map(candidate => candidate.trim().replace(/^W\\//, ''))
+    if (candidates.includes('*') || candidates.includes(etag)) return new Response(null, { status: 304, headers: { ETag: etag } })
+  }
+  return etagResponse(row)
+}
+
 const responseFromCache = (response: CachedMockResponse) => {
   const headers = new Headers(response.headers)
   headers.set('X-Mock-Idempotent-Replay', 'true')
@@ -408,19 +436,21 @@ export const handlers = resources.flatMap(resource => [
   })),
   http.get('*/api/' + resource.resource + '/:id', ({ params, request }) => withNetwork(request, () => {
     const row = db[resource.resource].find(item => sameId(item[resource.key], params.id))
-    return row ? HttpResponse.json(wrapped(row)) : errorResponse(404, 'Not found')
+    return row ? readWithEtag(request, row) : errorResponse(404, 'Not found')
   })),
   http.post('*/api/' + resource.resource, ({ request }) => withNetwork(request, () => withIdempotency(request, async () => {
     const input = await jsonBody(request)
     if (!input) return errorResponse(400, 'JSON object required')
     const result = insertRecord(input, resource)
-    return result.ok ? HttpResponse.json(wrapped(result.row), { status: 201 }) : errorResponse(result.status, result.message, result.details)
+    return result.ok ? etagResponse(result.row, 201) : errorResponse(result.status, result.message, result.details)
   }))),
   http.patch('*/api/' + resource.resource + '/:id', ({ params, request }) => withNetwork(request, async () => {
     const index = db[resource.resource].findIndex(item => sameId(item[resource.key], params.id))
     const input = await jsonBody(request)
     if (index < 0) return errorResponse(404, 'Not found')
     if (!input) return errorResponse(400, 'JSON object required')
+    const precondition = ifMatchError(request.headers.get('If-Match') ?? undefined, db[resource.resource][index])
+    if (precondition) return precondition
     const issue = validateBody(input, resource, true)
     if (issue) return errorResponse(422, issue.message, issue)
     const body = allowedBody(input, resource)
@@ -434,18 +464,20 @@ export const handlers = resources.flatMap(resource => [
       ...body,
       [resource.key]: db[resource.resource][index][resource.key],
     }
-    return HttpResponse.json(wrapped(db[resource.resource][index]))
+    return etagResponse(db[resource.resource][index])
   })),
   http.delete('*/api/' + resource.resource + '/:id', ({ params, request }) => withNetwork(request, () => {
     const index = db[resource.resource].findIndex(item => sameId(item[resource.key], params.id))
     if (index < 0) return errorResponse(404, 'Not found')
+    const precondition = ifMatchError(request.headers.get('If-Match') ?? undefined, db[resource.resource][index])
+    if (precondition) return precondition
     const dependents = dependentRows(resource, db[resource.resource][index])
     if (dependents.length && mockApiOptions.deletePolicy === 'restrict') {
       return errorResponse(409, 'Referenced by ' + dependents.length + ' child record(s)')
     }
     if (dependents.length) cascadeDependents(resource, db[resource.resource][index])
     const [deleted] = db[resource.resource].splice(index, 1)
-    return HttpResponse.json(wrapped(deleted))
+    return etagResponse(deleted)
   })),
 ])
 
@@ -478,7 +510,7 @@ const batchHandlers = resources.flatMap(resource => [
     const snapshot = structuredClone(db[resource.resource]), updated: MockRecord[] = [], seen = new Set<string>()
     for (let index = 0; index < values.length; index++) {
       const input = asRecord(values[index]), changes = asRecord(input?.changes), id = input?.id
-      if (!input || id == null || !changes || Object.keys(input).some(field => !['id', 'changes'].includes(field))) {
+      if (!input || id == null || !changes || Object.keys(input).some(field => !['id', 'changes', 'ifMatch'].includes(field))) {
         db[resource.resource] = snapshot
         return errorResponse(400, 'Each item requires only id and changes', { index })
       }
@@ -493,6 +525,8 @@ const batchHandlers = resources.flatMap(resource => [
         db[resource.resource] = snapshot
         return errorResponse(404, 'Record not found', { index })
       }
+      const precondition = ifMatchError(Object.prototype.hasOwnProperty.call(input, 'ifMatch') ? input.ifMatch : undefined, db[resource.resource][rowIndex], { index })
+      if (precondition) { db[resource.resource] = snapshot; return precondition }
       const issue = validateBody(changes, resource, true)
       if (issue) {
         db[resource.resource] = snapshot
@@ -515,18 +549,21 @@ const batchHandlers = resources.flatMap(resource => [
     return HttpResponse.json(wrapped(updated, { updated: updated.length }))
   })),
   http.delete('*/api/' + resource.resource + '/_batch', ({ request }) => withNetwork(request, async () => {
-    const payload = await requestJson(request), ids = Array.isArray(payload) ? payload : asRecord(payload)?.ids
-    if (!Array.isArray(ids) || ids.length === 0) return errorResponse(400, 'Non-empty ids array required')
-    if (ids.length > 1000) return errorResponse(400, 'Batch limit is 1000 records')
+    const payload = await requestJson(request), root = asRecord(payload), values = Array.isArray(payload) ? payload : Array.isArray(root?.items) ? root.items : root?.ids
+    if (!Array.isArray(values) || values.length === 0) return errorResponse(400, 'Non-empty ids or items array required')
+    if (values.length > 1000) return errorResponse(400, 'Batch limit is 1000 records')
     const databaseSnapshot = structuredClone(db), targets: MockRecord[] = [], seen = new Set<string>()
-    for (let index = 0; index < ids.length; index++) {
-      const id = ids[index]
+    for (let index = 0; index < values.length; index++) {
+      const item = asRecord(values[index]), id = item ? item.id : values[index]
+      if (item && (id == null || Object.keys(item).some(field => !['id', 'ifMatch'].includes(field)))) return errorResponse(400, 'Each delete item requires only id and optional ifMatch', { index })
       if (!['string', 'number'].includes(typeof id)) return errorResponse(400, 'Each id must be a string or number', { index })
       const identity = String(id)
       if (seen.has(identity)) return errorResponse(409, 'Duplicate id in batch', { index })
       seen.add(identity)
       const row = db[resource.resource].find(item => sameId(item[resource.key], id))
       if (!row) return errorResponse(404, 'Record not found', { index })
+      const precondition = ifMatchError(item && Object.prototype.hasOwnProperty.call(item, 'ifMatch') ? item.ifMatch : undefined, row, { index })
+      if (precondition) return precondition
       if (mockApiOptions.deletePolicy === 'restrict') {
         const dependents = dependentRows(resource, row)
         if (dependents.length) return errorResponse(409, 'Referenced by ' + dependents.length + ' child record(s)', { index })
@@ -615,7 +652,7 @@ const controlHandlers = [
     if (!Array.isArray(actions) || actions.length === 0) return errorResponse(400, 'Non-empty actions array required')
     if (actions.length > TRANSACTION_LIMIT) return errorResponse(400, 'Transaction limit is 100 actions')
     if (root && Object.keys(root).some(field => field !== 'actions')) return errorResponse(400, 'Transaction object only accepts actions')
-    const databaseSnapshot = structuredClone(db), aliases = new Map<string, MockRecord>(), results: Array<{ index: number; op: string; resource: string; row: MockRecord; alias?: string }> = []
+    const databaseSnapshot = structuredClone(db), aliases = new Map<string, MockRecord>(), results: Array<{ index: number; op: string; resource: string; row: MockRecord; etag: string; alias?: string }> = []
     const rollback = (status: number, message: string, index: number, details?: MockRecord) => {
       for (const definition of resources) db[definition.resource] = databaseSnapshot[definition.resource]
       return errorResponse(status, message, { index, ...(details ?? {}) })
@@ -625,7 +662,7 @@ const controlHandlers = [
       activeIndex = index
       const action = asRecord(actions[index]), op = action?.op, resourceName = action?.resource, alias = action?.as
       if (!action || !['create', 'update', 'delete'].includes(String(op)) || typeof resourceName !== 'string') return rollback(400, 'Each action requires op and resource', index)
-      const allowed = op === 'create' ? ['op', 'resource', 'body', 'as'] : op === 'update' ? ['op', 'resource', 'id', 'changes', 'as'] : ['op', 'resource', 'id', 'as']
+      const allowed = op === 'create' ? ['op', 'resource', 'body', 'as'] : op === 'update' ? ['op', 'resource', 'id', 'changes', 'ifMatch', 'as'] : ['op', 'resource', 'id', 'ifMatch', 'as']
       if (Object.keys(action).some(field => !allowed.includes(field))) return rollback(400, 'Unexpected transaction action field', index)
       const resource = resourceByName.get(resourceName)
       if (!resource) return rollback(400, 'Unknown resource: ' + resourceName, index)
@@ -645,6 +682,15 @@ const controlHandlers = [
         if (!['string', 'number'].includes(typeof resolvedId.value)) return rollback(400, 'Update/delete action requires string or number id', index)
         const rowIndex = db[resource.resource].findIndex(item => sameId(item[resource.key], resolvedId.value))
         if (rowIndex < 0) return rollback(404, 'Record not found', index)
+        const precondition = ifMatchError(Object.prototype.hasOwnProperty.call(action, 'ifMatch') ? action.ifMatch : undefined, db[resource.resource][rowIndex], { index })
+        if (precondition) {
+          for (const definition of resources) db[definition.resource] = databaseSnapshot[definition.resource]
+          if (precondition.status === 412) {
+            const restored = db[resource.resource].find(item => sameId(item[resource.key], resolvedId.value))
+            if (restored) return preconditionResponse(restored, { index })
+          }
+          return precondition
+        }
         if (op === 'update') {
           const resolved = resolveTransactionValue(action.changes, aliases), changes = resolved.ok ? asRecord(resolved.value) : null
           if (!resolved.ok) return rollback(400, resolved.message, index)
@@ -666,7 +712,7 @@ const controlHandlers = [
         }
       }
       if (typeof alias === 'string') aliases.set(alias, structuredClone(row))
-      results.push({ index, op: String(op), resource: resourceName, row: structuredClone(row), ...(typeof alias === 'string' ? { alias } : {}) })
+      results.push({ index, op: String(op), resource: resourceName, row: structuredClone(row), etag: rowEtag(row), ...(typeof alias === 'string' ? { alias } : {}) })
     } } catch (error) { return rollback(500, error instanceof Error ? error.message : 'Transaction failed', activeIndex) }
     return HttpResponse.json(wrapped(results, { actions: results.length, aliases: [...aliases.keys()] }))
   })),
@@ -706,7 +752,7 @@ npm run typecheck
 npm test
 \`\`\`
 
-包内测试会真实启动 MSW Node server，验证分页、CRUD、原子批量增改删、跨表事务、控制接口、复位、外键、删除策略和嵌套路由。
+包内测试会真实启动 MSW Node server，验证分页、CRUD、ETag 乐观锁、原子批量增改删、跨表事务、控制接口、复位、外键、删除策略和嵌套路由。
 
 ## 接入已有项目
 
@@ -739,10 +785,10 @@ ${routes.map(route=>`- \`GET ${route.list}?_page=1&_limit=20&_sort=${route.prima
 - \`GET ${route.detail}\`
 - \`POST ${route.list}\`
 - \`POST ${route.batch}\`（1–1,000 条，失败整批回滚）
-- \`PATCH ${route.batch}\`（\`[{ id, changes }]\`，失败整批回滚）
-- \`DELETE ${route.batch}\`（ID 数组或 \`{ ids: [] }\`，遵循引用删除策略）
-- \`PATCH ${route.detail}\`
-- \`DELETE ${route.detail}\``).join('\n')}
+- \`PATCH ${route.batch}\`（\`[{ id, changes, ifMatch? }]\`，失败整批回滚）
+- \`DELETE ${route.batch}\`（ID 数组、\`{ ids: [] }\` 或 \`{ items: [{ id, ifMatch }] }\`）
+- \`PATCH ${route.detail}\`（可发送 \`If-Match\`）
+- \`DELETE ${route.detail}\`（可发送 \`If-Match\`）`).join('\n')}
 
 ### 控制接口
 
@@ -761,13 +807,13 @@ ${routes.map(route=>`- \`GET ${route.list}?_page=1&_limit=20&_sort=${route.prima
 
 ${nested.length?`### 父子嵌套查询\n\n${nested.map(route=>`- \`GET ${route.path}\`（${route.parent} → ${route.child}.${route.foreignKey}）`).join('\n')}\n`:''}
 
-列表响应包含 \`X-Total-Count\`，业务响应包含稳定请求编号 \`X-Mock-Request-Id\` 和实际等待毫秒数 \`X-Mock-Latency\`，注入失败额外包含 \`X-Mock-Injected-Failure: true\`；单页最多 1,000 条。单条 POST、批量 POST 和跨表事务可发送 1–80 位 \`Idempotency-Key\`：同键、同方法、同路径和同请求体会原样重放且只写入一次，响应带 \`X-Mock-Idempotent-Replay: true\`；同键异参返回 409。缓存限制为最近 100 项和 10 MiB，请求签名输入限制 1 MiB；故障注入发生在幂等处理之前，因此模拟网络失败不会缓存，客户端可以按真实习惯重试。POST 自动补充缺失主键，主键或 Schema 中标记为 unique 的字段重复时返回 409 与 \`field/rule=unique\`。严格 Schema 校验关闭时，未知字段被兼容性丢弃；开启后，未知字段、类型、必填、空值、枚举、范围、长度和 PATCH 主键修改均返回 422，并附带 \`field\` 与 \`rule\`。开启外键校验时，POST/PATCH 的悬空外键返回 422。批量新增接受 JSON 数组或 \`{ items: [] }\`，批量修改接受 \`[{ id, changes }]\`，批量删除接受 ID 数组或 \`{ ids: [] }\`；单批最多 1,000 条。任一条格式、Schema、唯一、主键、外键或引用策略失败都会整批不落库，并在错误中返回从 0 开始的 \`index\`。级联批量删除会在 \`meta.cascaded\` 返回额外清理的后代数量。
+列表响应包含 \`X-Total-Count\`，业务响应包含稳定请求编号 \`X-Mock-Request-Id\` 和实际等待毫秒数 \`X-Mock-Latency\`，注入失败额外包含 \`X-Mock-Injected-Failure: true\`；单页最多 1,000 条。单条 GET/POST/PATCH/DELETE 返回基于当前记录内容的强 \`ETag\`；GET 可发送 \`If-None-Match\` 获得 304，PATCH/DELETE 可发送 \`If-Match\`，过期时返回 412 与最新 ETag，避免旧页面覆盖新数据。批量修改/删除可在每项携带 \`ifMatch\`，跨表事务的 update/delete 动作也支持它，任一过期会回滚全部前序变更。单条 POST、批量 POST 和跨表事务可发送 1–80 位 \`Idempotency-Key\`：同键、同方法、同路径和同请求体会原样重放且只写入一次，响应带 \`X-Mock-Idempotent-Replay: true\`；同键异参返回 409。缓存限制为最近 100 项和 10 MiB，请求签名输入限制 1 MiB；故障注入发生在幂等处理之前，因此模拟网络失败不会缓存，客户端可以按真实习惯重试。POST 自动补充缺失主键，主键或 Schema 中标记为 unique 的字段重复时返回 409 与 \`field/rule=unique\`。严格 Schema 校验关闭时，未知字段被兼容性丢弃；开启后，未知字段、类型、必填、空值、枚举、范围、长度和 PATCH 主键修改均返回 422，并附带 \`field\` 与 \`rule\`。开启外键校验时，POST/PATCH 的悬空外键返回 422。批量新增接受 JSON 数组或 \`{ items: [] }\`；单批最多 1,000 条。任一条格式、Schema、唯一、主键、外键、ETag 或引用策略失败都会整批不落库，并在错误中返回从 0 开始的 \`index\`。级联批量删除会在 \`meta.cascaded\` 返回额外清理的后代数量。
 
 ## 文件
 
 - \`db.json\`：可直接读取或交给 json-server 等兼容工具。
 - \`package.json\` / \`tsconfig.json\` / \`vitest.config.ts\`：独立可运行的测试工程配置，依赖使用精确版本。
-- \`handlers.test.ts\`：真实请求验证分页、CRUD、幂等重试、批量回滚、跨表事务、脱敏追踪、场景快照、控制接口、复位与关系策略。
+- \`handlers.test.ts\`：真实请求验证分页、CRUD、ETag 乐观锁、幂等重试、批量回滚、跨表事务、脱敏追踪、场景快照、控制接口、复位与关系策略。
 - \`config.ts\`：种子、延迟、失败率、失败状态码、响应格式与 Schema/关系校验开关。
 - \`handlers.ts\`：内存 CRUD、原子批量增改删、分页、搜索、字段筛选、排序与网络场景实现。
 - \`browser.ts\` / \`server.ts\`：浏览器和 Node 测试入口。
@@ -825,6 +871,19 @@ describe(${JSON.stringify(project.name+' Mock API')}, () => {
     const conflict = await fetch(origin + ${JSON.stringify(`/api/${first.name}`)}, { method: 'POST', headers: { 'content-type': 'application/json', 'Idempotency-Key': 'create-once-001' }, body: '{"different":true}' })
     expect(conflict.status).toBe(409); expect(db[table]).toHaveLength(before + 1)
     expect((await fetch(origin + '/api/__mock/idempotency', { method: 'DELETE' })).status).toBe(200)
+  })
+
+  it('ETag 阻止过期页面覆盖最新记录', async () => {
+    const row = db[${JSON.stringify(first.name)}][0], id = row[${JSON.stringify(firstPrimary.name)}], url = origin + ${JSON.stringify(`/api/${first.name}/`)} + id
+    const initial = await fetch(url), initialEtag = initial.headers.get('ETag')!
+    expect(initialEtag).toMatch(/^"mock-[a-f0-9-]+"$/)
+    expect((await fetch(url, { headers: { 'If-None-Match': initialEtag } })).status).toBe(304)
+    const changed = await fetch(url, { method: 'PATCH', headers: { 'content-type': 'application/json', 'If-Match': initialEtag }, body: JSON.stringify({ ${JSON.stringify(firstMutable.name)}: 'latest-value' }) })
+    expect(changed.status).toBe(200)
+    const currentEtag = changed.headers.get('ETag')!; expect(currentEtag).not.toBe(initialEtag)
+    const stale = await fetch(url, { method: 'PATCH', headers: { 'content-type': 'application/json', 'If-Match': initialEtag }, body: JSON.stringify({ ${JSON.stringify(firstMutable.name)}: 'stale-value' }) })
+    expect(stale.status).toBe(412); expect(stale.headers.get('ETag')).toBe(currentEtag)
+    expect(db[${JSON.stringify(first.name)}][0][${JSON.stringify(firstMutable.name)}]).toBe('latest-value')
   })
 
   it('严格模式按 Schema 拒绝非法字段并返回定位信息', async () => {
