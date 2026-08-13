@@ -52,6 +52,11 @@ export function diagnoseProject(project: ProjectSchema): DiagnosticIssue[] {
         if (missing.length) issues.push({ id: `formula-${field.id}`, level: 'error', title: '公式引用不存在字段', detail: `${table.label}.${field.label} 的公式引用了 ${[...new Set(missing)].join('、')}。`, tableId: table.id, fieldId: field.id, suggestion: '修正公式字段名，或先创建被引用字段。' })
       }
       if ((field.nullable || 0) + (field.missing || 0) > 100) issues.push({ id: `empty-rate-${field.id}`, level: 'warning', title: '空值比例可能超出预期', detail: `${table.label}.${field.label} 的空值率与缺失率之和超过 100%。`, tableId: table.id, fieldId: field.id, suggestion: '降低空值率或字段缺失率。' })
+      field.condition?.rules.forEach((rule, index) => {
+        if (rule.field === field.name) issues.push({ id: `condition-self-${field.id}-${index}`, level: 'error', title: '条件不能引用字段自身', detail: `${table.label}.${field.label} 的第 ${index + 1} 条条件引用了自身。`, tableId: table.id, fieldId: field.id, suggestion: '选择当前表中的另一个字段作为条件来源。' })
+        else if (!table.fields.some(candidate => candidate.name === rule.field)) issues.push({ id: `condition-field-${field.id}-${index}`, level: 'error', title: '条件引用不存在字段', detail: `${table.label}.${field.label} 的条件引用了 ${rule.field}，但该字段不存在。`, tableId: table.id, fieldId: field.id, suggestion: '重新选择条件来源字段，或移除这条规则。' })
+        if (!['empty', 'notEmpty'].includes(rule.operator) && !rule.value?.trim()) issues.push({ id: `condition-value-${field.id}-${index}`, level: 'warning', title: '条件比较值为空', detail: `${table.label}.${field.label} 的第 ${index + 1} 条条件没有比较值。`, tableId: table.id, fieldId: field.id, suggestion: '填写比较值；判断空值请改用“为空”或“不为空”。' })
+      })
     })
   })
   tableNames.forEach((count, name) => {

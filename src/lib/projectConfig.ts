@@ -11,6 +11,16 @@ const refSchema = z.object({
   field: z.string().min(1).max(80),
 })
 
+const conditionSchema = z.object({
+  combinator: z.enum(['and', 'or']),
+  rules: z.array(z.object({
+    field: z.string().min(1).max(80),
+    operator: z.enum(['equals', 'notEquals', 'contains', 'greaterThan', 'lessThan', 'empty', 'notEmpty']),
+    value: z.string().max(2_000).optional(),
+  })).min(1).max(10),
+  otherwise: z.enum(['null', 'omit']),
+})
+
 const fieldSchema = z.object({
   id: z.string().min(1).max(100),
   name: z.string().min(1).max(80).regex(/^[A-Za-z_][A-Za-z0-9_]*$/, '字段名只能使用字母、数字和下划线'),
@@ -34,6 +44,7 @@ const fieldSchema = z.object({
   ref: refSchema.optional(),
   formula: z.string().max(500).optional(),
   format: z.string().max(500).optional(),
+  condition: conditionSchema.optional(),
 })
 
 const tableSchema = z.object({

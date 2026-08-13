@@ -27,4 +27,13 @@ describe('生成前约束诊断', () => {
     expect(ids).toContain('dependency-cycle')
     expect(ids).toContain(`formula-${project.tables[0].fields[1].id}`)
   })
+
+  it('发现条件规则引用自身或不存在字段', () => {
+    const project = cloneTemplate('users')
+    const field = project.tables[0].fields[1]
+    field.condition = { combinator: 'or', rules: [{ field: field.name, operator: 'equals', value: 'A' }, { field: 'deleted', operator: 'empty' }], otherwise: 'omit' }
+    const ids = diagnoseProject(project).map(issue => issue.id)
+    expect(ids).toContain(`condition-self-${field.id}-0`)
+    expect(ids).toContain(`condition-field-${field.id}-1`)
+  })
 })

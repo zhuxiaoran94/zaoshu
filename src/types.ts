@@ -9,6 +9,14 @@ export interface GeneratorDefinition {
   sample?: string
 }
 
+export type ConditionOperator = 'equals' | 'notEquals' | 'contains' | 'greaterThan' | 'lessThan' | 'empty' | 'notEmpty'
+
+export interface FieldCondition {
+  combinator: 'and' | 'or'
+  rules: Array<{ field: string; operator: ConditionOperator; value?: string }>
+  otherwise: 'null' | 'omit'
+}
+
 export interface FieldRule {
   id: string
   name: string
@@ -32,6 +40,7 @@ export interface FieldRule {
   ref?: { tableId: string; field: string }
   formula?: string
   format?: string
+  condition?: FieldCondition
 }
 
 export interface TableSchema {

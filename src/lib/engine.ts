@@ -1,4 +1,4 @@
-import type { DataMode, DataRow, FieldRule, GenerateResult, GeneratedData, ProjectSchema, QualityCheck, TableSchema } from '../types'
+import type { ConditionOperator, DataMode, DataRow, FieldRule, GenerateResult, GeneratedData, ProjectSchema, QualityCheck, TableSchema } from '../types'
 import { generateValue, reseed } from '../data/generators'
 
 function hash(value:string) { let h=2166136261; for(const c of value) { h ^= c.charCodeAt(0); h=Math.imul(h,16777619) } return h>>>0 }
@@ -55,6 +55,25 @@ function resolveFormula(formula:string,row:DataRow):unknown {
   return row[expression] ?? null
 }
 
+function compareCondition(left: unknown, operator: ConditionOperator, right = '') {
+  const empty = left === undefined || left === null || left === ''
+  if (operator === 'empty') return empty
+  if (operator === 'notEmpty') return !empty
+  if (operator === 'equals') return String(left ?? '') === right
+  if (operator === 'notEquals') return String(left ?? '') !== right
+  if (operator === 'contains') return String(left ?? '').includes(right)
+  const leftNumber = Number(left); const rightNumber = Number(right)
+  if (!Number.isFinite(leftNumber) || !Number.isFinite(rightNumber)) return false
+  return operator === 'greaterThan' ? leftNumber > rightNumber : leftNumber < rightNumber
+}
+
+export function matchesFieldCondition(field: FieldRule, row: DataRow) {
+  const condition = field.condition
+  if (!condition?.rules.length) return true
+  const matches = condition.rules.map(rule => compareCondition(row[rule.field], rule.operator, rule.value))
+  return condition.combinator === 'or' ? matches.some(Boolean) : matches.every(Boolean)
+}
+
 function modeValue(field:FieldRule,rowIndex:number,mode:DataMode,pools:Record<string,string[]>) {
   if(mode==='boundary') return boundaryValue(field,rowIndex)
   return generateValue(field,rowIndex,pools)
@@ -84,6 +103,7 @@ export function generateProject(project:ProjectSchema,pools:Record<string,string
         row[field.name]=value
       }
       table.fields.filter(f=>f.formula).forEach(f=>{row[f.name]=resolveFormula(f.formula!,row)})
+      table.fields.filter(f=>f.condition&&!matchesFieldCondition(f,row)).forEach(f=>{if(f.condition!.otherwise==='omit')delete row[f.name];else row[f.name]=null})
       if(project.mode==='exception' && (i%5===0 || table.fields.some(f=>f.abnormal && random()*100<f.abnormal))) {
         const target=table.fields.filter(f=>!f.primaryKey)[i%Math.max(1,table.fields.filter(f=>!f.primaryKey).length)]??table.fields[0]
         mutate(row,target,i)

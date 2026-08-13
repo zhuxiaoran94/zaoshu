@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { cloneTemplate } from '../data/templates'
-import { generatePairwise, generateProject, sortTables } from './engine'
+import { generatePairwise, generateProject, matchesFieldCondition, sortTables } from './engine'
 import { neutralizeSpreadsheetFormula, toCSV, toSQL } from './exporters'
 import { parseProjectFile, serializeProject } from './projectConfig'
+import type { FieldRule } from '../types'
 
 describe('Mock造数引擎',()=>{
   it('相同随机种子生成一致结果',()=>{
@@ -42,7 +43,7 @@ describe('Mock造数引擎',()=>{
     expect(()=>sortTables(project.tables)).toThrow(/循环依赖/)
   })
   it('项目配置可以安全导出与恢复',()=>{
-    const project=cloneTemplate('finance')
+    const project=cloneTemplate('commerce')
     expect(parseProjectFile(serializeProject(project))).toEqual(project)
     expect(()=>parseProjectFile(JSON.stringify({fileType:'other',fileVersion:1,project}))).toThrow(/不是 Mock造数工具/)
   })
@@ -56,5 +57,21 @@ describe('Mock造数引擎',()=>{
   it('CSV 与 Excel 文本会阻断公式注入',()=>{
     expect(neutralizeSpreadsheetFormula('=HYPERLINK("https://evil.test")')).toBe(`'=HYPERLINK("https://evil.test")`)
     expect(toCSV([{value:'@SUM(1,2)'}])).toContain(`'@SUM(1,2)`)
+  })
+  it('条件字段支持 AND、OR、空值和数值比较',()=>{
+    const field:FieldRule={id:'paidAt',name:'paidAt',label:'支付时间',generator:'dateTime',dataType:'date',condition:{combinator:'and',rules:[{field:'status',operator:'equals',value:'成功'},{field:'amount',operator:'greaterThan',value:'100'}],otherwise:'null'}}
+    expect(matchesFieldCondition(field,{status:'成功',amount:101})).toBe(true)
+    expect(matchesFieldCondition(field,{status:'失败',amount:101})).toBe(false)
+    field.condition={combinator:'or',rules:[{field:'status',operator:'empty'},{field:'status',operator:'equals',value:'成功'}],otherwise:'null'}
+    expect(matchesFieldCondition(field,{status:null})).toBe(true)
+  })
+  it('条件不满足时按配置置空或移除字段',()=>{
+    const project=cloneTemplate('commerce');const payments=project.tables.find(table=>table.id==='payments')!;payments.count=4
+    const result=generateProject(project).data.payments
+    expect(result.filter(row=>row.status==='成功').every(row=>typeof row.paidAt==='string')).toBe(true)
+    expect(result.filter(row=>row.status!=='成功').every(row=>row.paidAt===null)).toBe(true)
+    const paidAt=payments.fields.find(field=>field.name==='paidAt')!;paidAt.condition!.otherwise='omit'
+    const omitted=generateProject(project).data.payments
+    expect(omitted.filter(row=>row.status!=='成功').every(row=>!('paidAt' in row))).toBe(true)
   })
 })
