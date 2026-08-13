@@ -1,0 +1,32 @@
+{
+  "name": "mock-data-studio",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "test": "vitest run",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@faker-js/faker": "^9.9.0",
+    "idb-keyval": "^6.2.2",
+    "lucide-react": "^0.468.0",
+    "papaparse": "^5.5.3",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "xlsx": "^0.18.5",
+    "zod": "^3.25.76",
+    "zustand": "^5.0.8"
+  },
+  "devDependencies": {
+    "@types/papaparse": "^5.3.16",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^4.4.1",
+    "typescript": "~5.7.3",
+    "vite": "^6.1.0",
+    "vitest": "^3.2.4"
+  }
+}

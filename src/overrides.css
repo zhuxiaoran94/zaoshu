@@ -1,0 +1,17 @@
+.button.cancel {
+  background: #fff0e9;
+  color: #a63e19;
+  border-color: #f6a581;
+}
+
+.run-stats.running svg {
+  animation: pulse 1s infinite alternate;
+}
+
+@keyframes pulse {
+  to { opacity: .35; transform: scale(.86); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .run-stats.running svg { animation: none; }
+}

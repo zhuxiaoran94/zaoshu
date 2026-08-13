@@ -1,0 +1,28 @@
+import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
+import { cloneTemplate } from './data/templates'
+import { generateProject } from './lib/engine'
+import type { DataPool, DataRow, GenerateResult, ProjectSchema } from './types'
+
+interface AppState {
+  project:ProjectSchema; activeTableId:string; selectedFieldId:string; result:GenerateResult|null; pools:DataPool[]; search:string; preview:'table'|'json'|'tree'; panel:'data'|'quality'|'coverage'|'pairwise'|'states'; query:string; onlyAbnormal:boolean; isGenerating:boolean; generationError:string;
+  setProject:(p:ProjectSchema)=>void; chooseTemplate:(id:string)=>void; setActiveTable:(id:string)=>void; selectField:(id:string)=>void; updateProject:(patch:Partial<ProjectSchema>)=>void; updateTable:(id:string,patch:Record<string,unknown>)=>void; updateField:(tableId:string,fieldId:string,patch:Record<string,unknown>)=>void; addField:()=>void; removeField:(id:string)=>void; duplicateField:(id:string)=>void; moveField:(id:string,direction:-1|1)=>void; generate:()=>void; cancelGenerate:()=>void; setResult:(r:GenerateResult|null)=>void; setPools:(p:DataPool[])=>void; setSearch:(s:string)=>void; setPreview:(p:'table'|'json'|'tree')=>void; setPanel:(p:AppState['panel'])=>void; setQuery:(s:string)=>void; setOnlyAbnormal:(v:boolean)=>void; deleteRow:(index:number)=>void; updateCell:(index:number,key:string,value:unknown)=>void;
+}
+const initial=cloneTemplate('commerce')
+let activeWorker:Worker|null=null
+export const useAppStore=create<AppState>()(persist((set,get)=>({
+  project:initial,activeTableId:initial.tables[0].id,selectedFieldId:initial.tables[0].fields[0].id,result:null,pools:[],search:'',preview:'table',panel:'data',query:'',onlyAbnormal:false,isGenerating:false,generationError:'',
+  setProject:(project)=>set({project,activeTableId:project.tables[0]?.id||'',selectedFieldId:project.tables[0]?.fields[0]?.id||'',result:null}),
+  chooseTemplate:(id)=>get().setProject(cloneTemplate(id)), setActiveTable:(activeTableId)=>set({activeTableId,selectedFieldId:get().project.tables.find(t=>t.id===activeTableId)?.fields[0]?.id||''}),selectField:(selectedFieldId)=>set({selectedFieldId}),
+  updateProject:(patch)=>set(s=>({project:{...s.project,...patch},result:null})),
+  updateTable:(id,patch)=>set(s=>({project:{...s.project,tables:s.project.tables.map(t=>t.id===id?{...t,...patch}:t)},result:null})),
+  updateField:(tableId,fieldId,patch)=>set(s=>({project:{...s.project,tables:s.project.tables.map(t=>t.id===tableId?{...t,fields:t.fields.map(f=>f.id===fieldId?{...f,...patch}:f)}:t)},result:null})),
+  addField:()=>set(s=>{const id=`f_${Date.now()}`;return{project:{...s.project,tables:s.project.tables.map(t=>t.id===s.activeTableId?{...t,fields:[...t.fields,{id,name:`field_${t.fields.length+1}`,label:'新字段',generator:'randomString',dataType:'string'}]}:t)},selectedFieldId:id,result:null}}),
+  removeField:(id)=>set(s=>({project:{...s.project,tables:s.project.tables.map(t=>t.id===s.activeTableId?{...t,fields:t.fields.filter(f=>f.id!==id)}:t)},selectedFieldId:'',result:null})),
+  duplicateField:(id)=>set(s=>({project:{...s.project,tables:s.project.tables.map(t=>{if(t.id!==s.activeTableId)return t;const source=t.fields.find(f=>f.id===id);return source?{...t,fields:[...t.fields,{...source,id:`f_${Date.now()}`,name:`${source.name}_copy`,label:`${source.label}副本`}]}:t})},result:null})),
+  moveField:(id,direction)=>set(s=>({project:{...s.project,tables:s.project.tables.map(t=>{if(t.id!==s.activeTableId)return t;const fields=[...t.fields],i=fields.findIndex(f=>f.id===id),j=i+direction;if(i<0||j<0||j>=fields.length)return t;[fields[i],fields[j]]=[fields[j],fields[i]];return{...t,fields}})},result:null})),
+  generate:()=>{const s=get();const poolMap=Object.fromEntries(s.pools.map(p=>[p.name,p.values]));const total=s.project.tables.reduce((n,t)=>n+t.count,0);set({isGenerating:true,generationError:'',panel:'data'});if(total<=1000||typeof Worker==='undefined'){try{set({result:generateProject(s.project,poolMap),isGenerating:false})}catch(error){set({generationError:error instanceof Error?error.message:'生成失败',isGenerating:false})}return}activeWorker?.terminate();activeWorker=new Worker(new URL('./workers/generator.worker.ts',import.meta.url),{type:'module'});activeWorker.onmessage=(event:MessageEvent<{ok:boolean;result?:GenerateResult;error?:string}>)=>{event.data.ok?set({result:event.data.result!,isGenerating:false}):set({generationError:event.data.error||'生成失败',isGenerating:false});activeWorker?.terminate();activeWorker=null};activeWorker.onerror=()=>{set({generationError:'生成任务执行失败',isGenerating:false});activeWorker?.terminate();activeWorker=null};activeWorker.postMessage({project:s.project,pools:poolMap})},
+  cancelGenerate:()=>{activeWorker?.terminate();activeWorker=null;set({isGenerating:false,generationError:'已取消本次生成'})},setResult:(result)=>set({result}),setPools:(pools)=>set({pools}),setSearch:(search)=>set({search}),setPreview:(preview)=>set({preview}),setPanel:(panel)=>set({panel}),setQuery:(query)=>set({query}),setOnlyAbnormal:(onlyAbnormal)=>set({onlyAbnormal}),
+  deleteRow:(index)=>set(s=>{if(!s.result)return{};const rows=[...(s.result.data[s.activeTableId]||[])];rows.splice(index,1);return{result:{...s.result,data:{...s.result.data,[s.activeTableId]:rows}}}}),
+  updateCell:(index,key,value)=>set(s=>{if(!s.result)return{};const rows=(s.result.data[s.activeTableId]||[]).map((r,i)=>i===index?{...r,[key]:value}:r);return{result:{...s.result,data:{...s.result.data,[s.activeTableId]:rows}}}}),
+}),{name:'mock-tool-ui',partialize:s=>({project:s.project,activeTableId:s.activeTableId,selectedFieldId:s.selectedFieldId,pools:s.pools})}))

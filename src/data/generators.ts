@@ -1,0 +1,178 @@
+import { fakerZH_CN as faker } from '@faker-js/faker'
+import type { DataType, FieldRule, GeneratorDefinition } from '../types'
+
+const defs: Array<[string, string, string, DataType, string?]> = [
+  ['autoId','自增 ID','标识','number','10001'], ['uuid','UUID','标识','string'], ['ulid','ULID','标识','string'], ['snowflake','雪花 ID','标识','string'],
+  ['traceId','Trace ID','标识','string'], ['spanId','Span ID','标识','string'], ['sessionId','Session ID','标识','string'], ['orderNo','订单号','标识','string'],
+  ['transactionNo','交易流水号','标识','string'], ['accountNo','账户号','标识','string'], ['sku','SKU 编码','标识','string'], ['productCode','商品编码','标识','string'],
+  ['chineseName','中文姓名','身份','string'], ['englishName','英文姓名','身份','string'], ['firstName','名','身份','string'], ['lastName','姓','身份','string'],
+  ['nickname','昵称','身份','string'], ['username','用户名','身份','string'], ['gender','性别','身份','string'], ['age','年龄','身份','number'],
+  ['birthday','生日','身份','date'], ['zodiac','生肖','身份','string'], ['constellation','星座','身份','string'], ['phone','手机号','身份','string'],
+  ['telephone','座机号','身份','string'], ['email','邮箱','身份','string'], ['idCard','虚构身份证','身份','string'], ['passport','护照格式','身份','string'],
+  ['driverLicense','驾驶证格式','身份','string'], ['avatar','头像 URL','身份','string'], ['bio','个人简介','身份','string'], ['job','职业','身份','string'],
+  ['company','公司','身份','string'], ['department','部门','身份','string'], ['position','职位','身份','string'], ['memberLevel','会员等级','身份','string'],
+  ['country','国家','地址','string'], ['province','省份','地址','string'], ['city','城市','地址','string'], ['district','区县','地址','string'],
+  ['address','详细地址','地址','string'], ['postcode','邮编','地址','string'], ['latitude','纬度','地址','number'], ['longitude','经度','地址','number'],
+  ['timezone','时区','地址','string'], ['locale','Locale','地址','string'], ['language','语言','地址','string'], ['ipv4','IPv4','网络','string'],
+  ['ipv6','IPv6','网络','string'], ['mac','MAC 地址','网络','string'], ['url','URL','网络','string'], ['domain','域名','网络','string'],
+  ['path','请求路径','网络','string'], ['query','Query 参数','网络','string'], ['httpMethod','HTTP 方法','网络','string'], ['httpStatus','HTTP 状态码','网络','number'],
+  ['contentType','Content-Type','网络','string'], ['userAgent','User-Agent','网络','string'], ['os','操作系统','网络','string'], ['browser','浏览器','网络','string'],
+  ['device','设备型号','网络','string'], ['appVersion','应用版本','网络','string'], ['gitCommit','Git Commit','网络','string'], ['errorCode','错误码','网络','string'],
+  ['integer','整数','数字','number'], ['positiveInt','正整数','数字','number'], ['negativeInt','负整数','数字','number'], ['float','小数','数字','number'],
+  ['amount','金额','金融','number'], ['discount','折扣','金融','number'], ['taxRate','税率','金融','number'], ['fee','手续费','金融','number'],
+  ['exchangeRate','汇率','金融','number'], ['percentage','百分比','数字','number'], ['probability','概率','数字','number'], ['rating','评分','数字','number'],
+  ['bankCard','银行卡格式','金融','string'], ['stockCode','股票代码','金融','string'], ['fundCode','基金代码','金融','string'], ['currency','币种','金融','string'],
+  ['bank','银行','金融','string'], ['riskLevel','风险等级','金融','string'], ['transactionType','交易类型','金融','string'], ['transactionStatus','交易状态','金融','string'],
+  ['date','日期','时间','date'], ['time','时间','时间','string'], ['dateTime','日期时间','时间','date'], ['timestamp','时间戳','时间','number'],
+  ['pastDate','过去时间','时间','date'], ['futureDate','未来时间','时间','date'], ['workday','工作日','时间','date'], ['weekend','周末','时间','date'],
+  ['monthStart','月初','时间','date'], ['monthEnd','月末','时间','date'], ['quarter','季度','时间','string'], ['fiscalYear','财务年度','时间','string'],
+  ['chineseWord','中文词语','文本','string'], ['chineseSentence','中文句子','文本','string'], ['chineseParagraph','中文段落','文本','string'], ['englishWord','英文单词','文本','string'],
+  ['englishSentence','英文句子','文本','string'], ['lorem','Lorem','文本','string'], ['productName','商品名称','业务','string'], ['newsTitle','新闻标题','文本','string'],
+  ['comment','用户评论','文本','string'], ['logMessage','日志消息','文本','string'], ['randomString','随机字符串','文本','string'], ['numericString','数字串','文本','string'],
+  ['alphaNumeric','字母数字串','文本','string'], ['emoji','Emoji','文本','string'], ['specialChars','特殊字符','文本','string'], ['boolean','布尔值','基础','boolean'],
+  ['userStatus','用户状态','枚举','string'], ['accountType','账号类型','枚举','string'], ['productCategory','商品分类','枚举','string'], ['brand','品牌','枚举','string'],
+  ['specification','商品规格','枚举','string'], ['unit','单位','枚举','string'], ['orderStatus','订单状态','枚举','string'], ['paymentMethod','支付方式','枚举','string'],
+  ['logisticsStatus','物流状态','枚举','string'], ['gameClass','游戏职业','游戏','string'], ['equipmentQuality','装备品质','游戏','string'], ['questStatus','任务状态','游戏','string'],
+  ['approvalStatus','审批状态','枚举','string'], ['priority','优先级','枚举','string'], ['serverName','游戏服务器','游戏','string'], ['itemName','游戏道具','游戏','string'],
+  ['guildName','公会名称','游戏','string'], ['playerLevel','玩家等级','游戏','number'], ['experience','经验值','游戏','number'], ['gold','金币','游戏','number'],
+  ['articleTitle','文章标题','社区','string'], ['tag','标签','社区','string'], ['reportReason','举报原因','社区','string'], ['trackingNo','运单号','物流','string'],
+  ['packageWeight','包裹重量','物流','number'], ['courierName','配送员','物流','string'], ['fileName','文件名','测试','string'], ['mimeType','文件类型','测试','string'],
+  ['fileSize','文件大小','测试','number'], ['treePath','树节点路径','测试','string'], ['batchStatus','批次状态','测试','string'], ['customEnum','自定义枚举','自定义','string'],
+  ['fixed','固定值','自定义','string'], ['sequence','序列值','自定义','number'], ['template','格式模板','自定义','string'], ['dataPool','自定义数据池','自定义','string'],
+]
+
+export const GENERATORS: GeneratorDefinition[] = defs.map(([key,name,category,dataType,sample]) => ({ key,name,category,dataType,sample }))
+
+const pick = <T>(items: T[], index?: number): T => items[(index ?? faker.number.int({ min: 0, max: items.length - 1 })) % items.length]
+const pad = (n: number, width = 6) => String(n).padStart(width, '0')
+const randomDigits = (len: number) => Array.from({ length: len }, () => faker.number.int({ min: 0, max: 9 })).join('')
+const cnWords = ['质量','星河','智造','远航','敏捷','数智','云端','先锋','卓越','未来','协同','守护']
+const DETERMINISTIC_EPOCH = 1755129600000
+const enumMap: Record<string, unknown[]> = {
+  gender:['男','女','未知'], zodiac:['鼠','牛','虎','兔','龙','蛇','马','羊','猴','鸡','狗','猪'], constellation:['白羊座','金牛座','双子座','巨蟹座','狮子座','处女座','天秤座','天蝎座','射手座','摩羯座','水瓶座','双鱼座'],
+  memberLevel:['普通','白银','黄金','黑金'], timezone:['Asia/Shanghai','Asia/Tokyo','Europe/London','America/New_York'], locale:['zh-CN','en-US','ja-JP'], language:['中文','English','日本語'],
+  httpMethod:['GET','POST','PUT','PATCH','DELETE'], httpStatus:[200,201,204,400,401,403,404,409,422,500], contentType:['application/json','multipart/form-data','text/plain','application/xml'], os:['macOS','Windows 11','Ubuntu','iOS','Android'], browser:['Chrome','Safari','Edge','Firefox'],
+  currency:['CNY','USD','EUR','JPY','HKD'], bank:['工商银行','建设银行','招商银行','中国银行','浦发银行'], riskLevel:['低风险','中风险','高风险'], transactionType:['收入','支出','转账','退款'], transactionStatus:['处理中','成功','失败','已撤销'],
+  userStatus:['正常','冻结','注销','待激活'], accountType:['个人','企业','测试'], productCategory:['数码','服饰','食品','家居','运动'], brand:['云杉','北辰','逐光','原野','墨石'], specification:['标准版','轻享版','专业版','旗舰版'], unit:['件','套','盒','台','kg'],
+  orderStatus:['待支付','已支付','待发货','已发货','已签收','已退款'], paymentMethod:['微信支付','支付宝','银行卡','余额'], logisticsStatus:['已揽收','运输中','到达网点','派送中','已签收'], gameClass:['战士','法师','游侠','牧师','刺客'], equipmentQuality:['普通','精良','稀有','史诗','传说'], questStatus:['未领取','进行中','已完成','已领奖'],
+  approvalStatus:['待审批','已通过','已驳回','已撤销'], priority:['P0','P1','P2','P3'], serverName:['晨曦之地','风暴峡谷','星海边境','永夜之城'], itemName:['生命药水','秘银长剑','星尘宝箱','传送卷轴'], reportReason:['垃圾广告','侵权','辱骂','虚假信息'], batchStatus:['待执行','执行中','成功','部分失败','失败'], boolean:[true,false],
+}
+
+const isoDate = (d: Date, withTime = false) => withTime ? d.toISOString() : d.toISOString().slice(0,10)
+const boundedNumber = (rule: FieldRule, defaultMin = 0, defaultMax = 100) => {
+  const min = rule.min ?? defaultMin; const max = rule.max ?? defaultMax
+  return rule.precision ? Number(faker.number.float({ min, max, fractionDigits: rule.precision }).toFixed(rule.precision)) : faker.number.int({ min, max })
+}
+
+export function generateValue(rule: FieldRule, rowIndex: number, pools: Record<string,string[]> = {}): unknown {
+  const g = rule.generator
+  if (rule.fixedValue !== undefined && rule.fixedValue !== '') return rule.fixedValue
+  if (g === 'customEnum' && rule.values?.length) return pick(rule.values, rowIndex)
+  if (g === 'dataPool') return pick(pools[rule.fixedValue || ''] || ['未配置数据池'], rowIndex)
+  if (enumMap[g]) return pick(enumMap[g], rowIndex)
+  if (['autoId','sequence'].includes(g)) return (rule.min ?? 1) + rowIndex * (rule.max ?? 1)
+  if (g === 'uuid') return faker.string.uuid()
+  if (g === 'ulid') return `${(DETERMINISTIC_EPOCH+rowIndex).toString(36).toUpperCase()}${faker.string.alphanumeric(16).toUpperCase()}`.slice(0,26)
+  if (g === 'snowflake') return String(BigInt(DETERMINISTIC_EPOCH) * 100000n + BigInt(rowIndex + 1))
+  if (['traceId','sessionId'].includes(g)) return faker.string.hexadecimal({ length: 32, prefix: '' }).toLowerCase()
+  if (g === 'spanId') return faker.string.hexadecimal({ length: 16, prefix: '' }).toLowerCase()
+  if (g === 'orderNo') return `ORD20250814${pad(rowIndex+1,8)}`
+  if (g === 'transactionNo') return `TXN${DETERMINISTIC_EPOCH+rowIndex}${pad(rowIndex+1,5)}`
+  if (g === 'accountNo') return `AC${randomDigits(14)}`
+  if (['sku','productCode'].includes(g)) return `${g==='sku'?'SKU':'PRD'}-${faker.string.alpha({ length: 3, casing: 'upper' })}-${pad(rowIndex+1)}`
+  if (g === 'chineseName') return faker.person.fullName()
+  if (g === 'englishName') return `${faker.person.firstName()} ${faker.person.lastName()}`
+  if (g === 'firstName') return faker.person.firstName()
+  if (g === 'lastName') return faker.person.lastName()
+  if (g === 'nickname') return `${pick(cnWords)}_${faker.string.alphanumeric(4)}`
+  if (g === 'username') return faker.internet.username()
+  if (g === 'age') return boundedNumber(rule,18,70)
+  if (g === 'birthday') return isoDate(faker.date.birthdate({ min: 18, max: 70, mode:'age' }))
+  if (g === 'phone') return `1${pick(['3','5','6','7','8','9'])}${randomDigits(9)}`
+  if (g === 'telephone') return `0${faker.number.int({min:10,max:99})}-${randomDigits(8)}`
+  if (g === 'email') return faker.internet.email().toLowerCase()
+  if (['idCard','driverLicense'].includes(g)) return `11010119${randomDigits(10)}`
+  if (g === 'passport') return `E${randomDigits(8)}`
+  if (g === 'avatar') return `https://api.dicebear.com/9.x/initials/svg?seed=${rowIndex+1}`
+  if (g === 'bio') return `${pick(cnWords)}领域从业者，关注产品体验与工程质量。`
+  if (g === 'job') return pick(['测试开发工程师','产品经理','后端工程师','设计师','数据分析师'])
+  if (g === 'company') return `${pick(cnWords)}科技有限公司`
+  if (g === 'department') return pick(['研发中心','质量工程部','产品部','运营部','财务部'])
+  if (g === 'position') return pick(['工程师','高级工程师','主管','经理','专家'])
+  if (g === 'country') return pick(['中国','新加坡','日本','美国','英国'])
+  if (g === 'province') return pick(['北京市','上海市','广东省','浙江省','四川省','湖北省'])
+  if (g === 'city') return pick(['北京','上海','深圳','杭州','成都','武汉'])
+  if (g === 'district') return pick(['朝阳区','浦东新区','南山区','余杭区','武侯区','洪山区'])
+  if (g === 'address') return `${generateValue({...rule,generator:'province'},rowIndex)}${generateValue({...rule,generator:'city'},rowIndex)}${generateValue({...rule,generator:'district'},rowIndex)}未来路${faker.number.int({min:1,max:999})}号`
+  if (g === 'postcode') return randomDigits(6)
+  if (g === 'latitude') return boundedNumber({...rule,precision:6},-90,90)
+  if (g === 'longitude') return boundedNumber({...rule,precision:6},-180,180)
+  if (g === 'ipv4') return faker.internet.ipv4()
+  if (g === 'ipv6') return faker.internet.ipv6()
+  if (g === 'mac') return faker.internet.mac()
+  if (g === 'url') return faker.internet.url()
+  if (g === 'domain') return faker.internet.domainName()
+  if (g === 'path') return `/${pick(['api','open','v1'])}/${pick(['users','orders','items'])}/${rowIndex+1}`
+  if (g === 'query') return `page=${rowIndex+1}&size=20`
+  if (g === 'userAgent') return faker.internet.userAgent()
+  if (g === 'device') return pick(['iPhone 16','Pixel 9','MacBook Pro','Windows PC','iPad Air'])
+  if (g === 'appVersion') return `${faker.number.int({min:1,max:9})}.${faker.number.int({min:0,max:9})}.${faker.number.int({min:0,max:20})}`
+  if (g === 'gitCommit') return faker.string.hexadecimal({length:40,prefix:''}).toLowerCase()
+  if (g === 'errorCode') return `E${faker.number.int({min:1000,max:9999})}`
+  if (['integer','positiveInt'].includes(g)) return boundedNumber(rule,0,10000)
+  if (g === 'negativeInt') return -boundedNumber(rule,1,10000)
+  if (g === 'float') return boundedNumber({...rule,precision:rule.precision??2},0,1000)
+  if (['amount','fee','exchangeRate'].includes(g)) return boundedNumber({...rule,precision:rule.precision??2},rule.min??0.01,rule.max??9999)
+  if (g === 'discount') return boundedNumber({...rule,precision:2},0,1)
+  if (g === 'taxRate') return pick([0,0.03,0.06,0.09,0.13])
+  if (g === 'percentage') return boundedNumber({...rule,precision:2},0,100)
+  if (g === 'probability') return boundedNumber({...rule,precision:3},0,1)
+  if (g === 'rating') return boundedNumber({...rule,precision:1},1,5)
+  if (g === 'bankCard') return `62${randomDigits(17)}`
+  if (g === 'stockCode') return String(faker.number.int({min:1,max:999999})).padStart(6,'0')
+  if (g === 'fundCode') return String(faker.number.int({min:1,max:999999})).padStart(6,'0')
+  if (['date','pastDate','futureDate','workday','weekend','monthStart','monthEnd','dateTime'].includes(g)) {
+    let d = g==='futureDate' ? faker.date.future() : g==='pastDate' ? faker.date.past() : faker.date.between({from:'2023-01-01',to:'2027-12-31'})
+    if(g==='workday') while([0,6].includes(d.getDay())) d.setDate(d.getDate()+1)
+    if(g==='weekend') while(![0,6].includes(d.getDay())) d.setDate(d.getDate()+1)
+    if(g==='monthStart') d.setDate(1)
+    if(g==='monthEnd') d = new Date(d.getFullYear(),d.getMonth()+1,0)
+    return isoDate(d,g==='dateTime')
+  }
+  if (g === 'time') return `${pad(faker.number.int({min:0,max:23}),2)}:${pad(faker.number.int({min:0,max:59}),2)}:${pad(faker.number.int({min:0,max:59}),2)}`
+  if (g === 'timestamp') return faker.date.recent().getTime()
+  if (g === 'quarter') return `${faker.number.int({min:2024,max:2027})}-Q${faker.number.int({min:1,max:4})}`
+  if (g === 'fiscalYear') return `FY${faker.number.int({min:2024,max:2028})}`
+  if (g === 'chineseWord') return pick(cnWords)
+  if (['chineseSentence','newsTitle','articleTitle'].includes(g)) return `${pick(cnWords)}${pick(['平台','计划','报告','实践','观察'])}：${pick(['让数据更可信','构建稳定体验','洞察业务增长'])}`
+  if (g === 'chineseParagraph') return `${pick(cnWords)}连接业务与技术。通过清晰的规则、稳定的数据和可追溯的过程，让每一次验证更有价值。`
+  if (g === 'englishWord') return faker.word.noun()
+  if (g === 'englishSentence') return faker.lorem.sentence()
+  if (g === 'lorem') return faker.lorem.paragraph()
+  if (g === 'productName') return `${pick(['轻云','极光','远山','青鸟'])}${pick(['智能手表','机械键盘','降噪耳机','旅行背包'])}`
+  if (g === 'comment') return pick(['体验很好，符合预期。','功能完整，操作很顺手。','包装完好，物流速度快。','还有提升空间。'])
+  if (g === 'logMessage') return `${pick(['INFO','WARN','ERROR'])} request completed in ${faker.number.int({min:8,max:800})}ms`
+  if (g === 'randomString') return faker.string.alphanumeric(rule.length??12)
+  if (g === 'numericString') return randomDigits(rule.length??10)
+  if (g === 'alphaNumeric') return faker.string.alphanumeric(rule.length??16)
+  if (g === 'emoji') return pick(['🚀','🧪','✅','🎮','📦','💡'])
+  if (g === 'specialChars') return pick([`' OR 1=1 --`,'<script>alert(1)</script>','../../etc/passwd','测试\n换行','é'])
+  if (g === 'productName') return `${pick(cnWords)}${pick(['耳机','手表','键盘','背包'])}`
+  if (g === 'serverName' || g === 'itemName' || g === 'guildName') return pick(enumMap[g] ?? [`${pick(cnWords)}公会`])
+  if (g === 'playerLevel') return boundedNumber(rule,1,100)
+  if (g === 'experience') return boundedNumber(rule,0,999999)
+  if (g === 'gold') return boundedNumber(rule,0,1000000)
+  if (g === 'tag') return pick(['测试','技术','效率','分享','产品'])
+  if (g === 'trackingNo') return `SF${randomDigits(13)}`
+  if (g === 'packageWeight') return boundedNumber({...rule,precision:2},0.1,50)
+  if (g === 'courierName') return faker.person.fullName()
+  if (g === 'fileName') return `${pick(['report','avatar','contract','data'])}_${rowIndex+1}.${pick(['pdf','png','csv','json'])}`
+  if (g === 'mimeType') return pick(['application/pdf','image/png','text/csv','application/json'])
+  if (g === 'fileSize') return boundedNumber(rule,1024,104857600)
+  if (g === 'treePath') return `/总部/${pick(['研发','质量','产品'])}/${pick(['一组','二组','平台组'])}`
+  if (g === 'template') return (rule.format || '{date}-{seq}').replace('{date}','20250814').replace('{seq}',pad(rowIndex+1))
+  if (g === 'fixed') return rule.fixedValue ?? ''
+  return faker.string.alphanumeric(rule.length??10)
+}
+
+export function reseed(seed: number) { faker.seed(seed) }
