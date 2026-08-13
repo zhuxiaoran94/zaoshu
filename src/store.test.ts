@@ -68,4 +68,17 @@ describe('项目建模状态', () => {
     useAppStore.getState().deleteRow(0)
     expect(useAppStore.getState().result!.report.checks.find(check => check.id === 'count-users')?.status).toBe('fail')
   })
+
+  it('批量字段配置只产生一次撤销记录',()=>{
+    const state=useAppStore.getState(),table=state.project.tables.find(candidate=>candidate.id==='products')!,ids=table.fields.slice(1,4).map(field=>field.id)
+    state.bulkUpdateFields(table.id,ids,{nullable:12,missing:3,distribution:'longTail'})
+    const changed=useAppStore.getState();expect(changed.past).toHaveLength(1);expect(changed.project.tables.find(candidate=>candidate.id===table.id)!.fields.filter(field=>ids.includes(field.id)).every(field=>field.nullable===12&&field.missing===3&&field.distribution==='longTail')).toBe(true)
+    changed.undo();expect(useAppStore.getState().project.tables.find(candidate=>candidate.id===table.id)!.fields.filter(field=>ids.includes(field.id)).every(field=>field.nullable!==12)).toBe(true)
+  })
+
+  it('批量删除保护最后字段和被引用主键',()=>{
+    const state=useAppStore.getState(),users=state.project.tables.find(candidate=>candidate.id==='users')!,products=state.project.tables.find(candidate=>candidate.id==='products')!
+    state.bulkRemoveFields(users.id,[users.fields[0].id]);expect(useAppStore.getState().generationError).toMatch(/外键引用/)
+    useAppStore.getState().bulkRemoveFields(products.id,products.fields.map(field=>field.id));expect(useAppStore.getState().project.tables.find(candidate=>candidate.id==='products')!.fields.length).toBe(products.fields.length);expect(useAppStore.getState().generationError).toMatch(/至少需要保留/)
+  })
 })
