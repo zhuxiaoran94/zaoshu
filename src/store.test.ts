@@ -12,6 +12,7 @@ describe('项目建模状态', () => {
       past: [],
       future: [],
       generationError: '',
+      diagnostics: [],
     })
   })
 
@@ -41,5 +42,15 @@ describe('项目建模状态', () => {
     const copy = tables.find(table => table.label === '商品副本')!
     expect(copy.name).not.toBe(original.name)
     expect(new Set([...original.fields, ...copy.fields].map(field => field.id)).size).toBe(original.fields.length + copy.fields.length)
+  })
+
+  it('阻断问题存在时不会启动生成', () => {
+    const table = useAppStore.getState().project.tables[0]
+    useAppStore.getState().updateField(table.id, table.fields[0].id, { min: 10, max: 1 })
+    useAppStore.getState().generate()
+    const state = useAppStore.getState()
+    expect(state.result).toBeNull()
+    expect(state.panel).toBe('diagnostics')
+    expect(state.generationError).toMatch(/阻断问题/)
   })
 })

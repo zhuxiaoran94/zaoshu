@@ -1,0 +1,30 @@
+import { describe, expect, it } from 'vitest'
+import { cloneTemplate } from '../data/templates'
+import { diagnoseProject } from './diagnostics'
+
+describe('生成前约束诊断', () => {
+  it('内置模板默认没有阻断问题', () => {
+    for (const id of ['users', 'commerce', 'finance', 'game', 'content', 'logistics', 'testing']) {
+      expect(diagnoseProject(cloneTemplate(id)).filter(issue => issue.level === 'error')).toEqual([])
+    }
+  })
+
+  it('发现唯一枚举容量不足并定位字段', () => {
+    const project = cloneTemplate('users')
+    const field = project.tables[0].fields[1]
+    field.generator = 'gender'
+    field.unique = true
+    project.tables[0].count = 10
+    const issue = diagnoseProject(project).find(item => item.id === `unique-${field.id}`)
+    expect(issue).toMatchObject({ level: 'error', tableId: project.tables[0].id, fieldId: field.id })
+  })
+
+  it('发现循环依赖和公式中的无效引用', () => {
+    const project = cloneTemplate('users')
+    project.tables[0].fields[0].ref = { tableId: 'addresses', field: 'id' }
+    project.tables[0].fields[1].formula = 'missing_name + "-ok"'
+    const ids = diagnoseProject(project).map(issue => issue.id)
+    expect(ids).toContain('dependency-cycle')
+    expect(ids).toContain(`formula-${project.tables[0].fields[1].id}`)
+  })
+})
