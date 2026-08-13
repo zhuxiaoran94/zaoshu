@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { cloneTemplate } from '../data/templates'
-import { analyzePairwiseCoverage, generatePairwise, generateProject, matchesFieldCondition, parsePairwiseRules, sortTables } from './engine'
+import { analyzePairwiseCoverage, generatePairwise, generateProject, generateStateEvents, matchesFieldCondition, parsePairwiseRules, sortTables } from './engine'
 import { neutralizeSpreadsheetFormula, toCSV, toSQL } from './exporters'
 import { parseProjectFile, serializeProject } from './projectConfig'
 import type { FieldRule } from '../types'
@@ -89,5 +89,20 @@ describe('Mock造数引擎',()=>{
     const paidAt=payments.fields.find(field=>field.name==='paidAt')!;paidAt.condition!.otherwise='omit'
     const omitted=generateProject(project).data.payments
     expect(omitted.filter(row=>row.status!=='成功').every(row=>!('paidAt' in row))).toBe(true)
+  })
+  it('状态链支持固定终态、停留时长与可复现结果',()=>{
+    const options={terminalIndex:2,minStayMinutes:15,maxStayMinutes:30,errorMode:'none' as const}
+    const events=generateStateEvents('order',3,42,options)
+    expect(events).toHaveLength(9)
+    expect(events.filter(event=>event.entityId==='order-1').map(event=>event.status)).toEqual(['待支付','已支付','待发货'])
+    expect(events.filter(event=>event.stayMinutes!==null).every(event=>event.stayMinutes!>=15&&event.stayMinutes!<=30)).toBe(true)
+    expect(generateStateEvents('order',3,42,options)).toEqual(events)
+  })
+  it('状态链可定向注入倒退、跳过和重复事件',()=>{
+    for(const errorMode of ['rollback','skip','duplicate'] as const){
+      const events=generateStateEvents('logistics',4,42,{errorMode})
+      expect(events.some(event=>!event.valid&&event.mutation===errorMode)).toBe(true)
+      expect(events.every((event,index,array)=>index===0||event.entityId!==array[index-1].entityId||new Date(event.occurredAt)>new Date(array[index-1].occurredAt))).toBe(true)
+    }
   })
 })

@@ -261,6 +261,28 @@
   }
 }
 
+.state-lab > header { justify-content: space-between; gap: 16px; }
+.state-lab .state-controls { display: grid; grid-template-columns: repeat(4, minmax(100px, 1fr)); align-items: end; gap: 7px; }
+.state-lab .state-controls > label { display: flex; min-width: 0; flex-direction: column; gap: 4px; color: var(--muted); font-size: 8px; }
+.state-lab .state-controls > label:first-child { grid-column: span 2; }
+.state-lab .state-controls > label:last-child { grid-column: span 2; }
+.state-lab .state-controls select,
+.state-lab .state-controls input { width: 100%; min-width: 0; height: 31px; border: 1px solid #cbd8df; border-radius: 6px; background: white; padding: 0 7px; color: var(--ink); font-size: 9px; }
+.stay-inputs { display: grid; grid-template-columns: 1fr 12px 1fr; align-items: center; }
+.stay-inputs i { color: var(--muted); font-style: normal; text-align: center; }
+.state-chain { display: flex; overflow-x: auto; margin: 4px 0 9px; border: 1px solid var(--line); border-radius: 8px; background: white; padding: 10px; }
+.state-chain span { display: flex; align-items: center; color: #9aabb3; font-size: 9px; white-space: nowrap; }
+.state-chain span.included { color: #17656b; font-weight: 700; }
+.state-chain i { margin: 0 7px; color: #b7c8cf; font-style: normal; }
+.state-summary { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 12px; }
+.state-summary code { border-radius: 4px; background: #e8f2f3; padding: 5px 7px; color: #3f6970; font-size: 8px; }
+
+@media (max-width: 680px) {
+  .state-lab .state-controls { grid-template-columns: 1fr 1fr; }
+  .state-lab .state-controls > label:first-child,
+  .state-lab .state-controls > label:last-child { grid-column: span 2; }
+}
+
 .result-tabs button {
   position: relative;
 }

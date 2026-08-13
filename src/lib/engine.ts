@@ -209,7 +209,10 @@ export const STATE_CHAINS = {
   quest:['未领取','进行中','已完成','已领奖'],
 }
 
-export function generateStateEvents(type:keyof typeof STATE_CHAINS,count:number,seed:number,injectError=false) {
-  const chain=STATE_CHAINS[type]; const random=seeded(seed); const base=Date.now()-86400000
-  return Array.from({length:count},(_,entity)=>{ const traceId=`trace-${seed}-${entity+1}`; let time=base+entity*60000; const states=[...chain]; if(injectError&&entity%4===0) states.splice(2,0,states[0]); return states.map((status,index)=>{time+=Math.floor((10+random()*180)*60000);return {entityId:`${type}-${entity+1}`,traceId,sequence:index+1,status,occurredAt:new Date(time).toISOString(),valid:!injectError||entity%4!==0||index!==2}}) }).flat()
+export type StateErrorMode='none'|'rollback'|'skip'|'duplicate'
+export interface StateEventOptions { errorMode?:StateErrorMode; minStayMinutes?:number; maxStayMinutes?:number; terminalIndex?:number }
+
+export function generateStateEvents(type:keyof typeof STATE_CHAINS,count:number,seed:number,options:boolean|StateEventOptions=false) {
+  const chain=STATE_CHAINS[type];const config:StateEventOptions=typeof options==='boolean'?{errorMode:options?'rollback':'none'}:options;const errorMode=config.errorMode||'none',minStay=Math.max(1,Math.min(10_080,Math.round(config.minStayMinutes??10))),maxStay=Math.max(minStay,Math.min(10_080,Math.round(config.maxStayMinutes??180))),terminal=Math.max(1,Math.min(chain.length-1,config.terminalIndex??chain.length-1));const random=seeded(seed),base=1755129600000-86400000
+  return Array.from({length:Math.max(1,Math.min(10_000,Math.floor(count)))},(_,entity)=>{const traceId=`trace-${seed}-${entity+1}`,normal=chain.slice(0,terminal+1),states=[...normal],invalidIndexes=new Set<number>();if(errorMode!=='none'&&entity%4===0){const at=Math.min(2,states.length-1);if(errorMode==='rollback'){states.splice(at,0,states[Math.max(0,at-2)]);invalidIndexes.add(at)}else if(errorMode==='skip'&&states.length>2){states.splice(1,1);invalidIndexes.add(1)}else if(errorMode==='duplicate'){states.splice(at,0,states[Math.max(0,at-1)]);invalidIndexes.add(at)}}let time=base+entity*60000;return states.map((status,index)=>{const stayMinutes=Math.floor(minStay+random()*(maxStay-minStay+1));time+=stayMinutes*60000;return{entityId:`${type}-${entity+1}`,traceId,sequence:index+1,status,occurredAt:new Date(time).toISOString(),stayMinutes:index===0?null:stayMinutes,valid:!invalidIndexes.has(index),mutation:invalidIndexes.has(index)?errorMode:undefined}})}).flat()
 }
