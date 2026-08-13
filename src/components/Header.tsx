@@ -1,4 +1,4 @@
-import { Command, Download, FlaskConical, FolderCog, Play, ShieldCheck, Upload, X } from './Icons'
+import { CalendarClock, Command, Download, FlaskConical, FolderCog, Play, ShieldCheck, Upload, X } from './Icons'
 import { useAppStore } from '../store'
 import type { DataMode } from '../types'
 
@@ -7,6 +7,7 @@ const modes:Array<{id:DataMode;label:string;hint:string}>=[{id:'random',label:'�
 export default function Header({onExport,onProject,onSchemaImport,onCommand}:{onExport:()=>void;onProject:()=>void;onSchemaImport:()=>void;onCommand:()=>void}) {
   const {project,updateProject,generate,cancelGenerate,result,setPanel,isGenerating,generationError}=useAppStore()
   const run=()=>project.mode==='pairwise'?setPanel('pairwise'):generate()
+  const referenceDate=(project.referenceDate??'2026-08-14T00:00:00.000Z').slice(0,10),setReferenceDate=(value:string)=>{if(value)updateProject({referenceDate:`${value}T00:00:00.000Z`})}
   return <>
     <header className="topbar">
       <div className="brand"><span className="brand-mark"><FlaskConical size={20}/></span><div><strong>Mock造数工具</strong><span>TEST DATA WORKBENCH</span></div></div>
@@ -16,6 +17,7 @@ export default function Header({onExport,onProject,onSchemaImport,onCommand}:{on
     <section className="pipeline" aria-label="造数流水线">
       <div className="pipeline-label"><span>造数模式</span><strong>{modes.find(m=>m.id===project.mode)?.hint}</strong></div>
       <div className="mode-track">{modes.map((mode,i)=><button key={mode.id} className={`mode-node ${project.mode===mode.id?'active':''}`} onClick={()=>updateProject({mode:mode.id})}><i>{i+1}</i><span>{mode.label}</span></button>)}</div>
+      <div className="reference-date-control" title={`相对日期、订单号和格式模板均以 ${project.referenceDate??referenceDate} 为基准`}><CalendarClock/><label><span>时间基准</span><input aria-label="时间基准" type="date" value={referenceDate} onChange={event=>setReferenceDate(event.target.value)}/></label><button onClick={()=>updateProject({referenceDate:new Date().toISOString()})}>设为现在</button></div>
       <div className={`run-stats ${isGenerating?'running':''}`}><ShieldCheck size={18}/><div><strong>{isGenerating?'正在分块生成…':result?`${result.report.totalRows.toLocaleString()} 条`:'等待生成'}</strong><span>{generationError||(!isGenerating&&result?`${result.report.duration}ms · 本地完成`:'数据不会离开浏览器')}</span></div></div>
     </section>
   </>

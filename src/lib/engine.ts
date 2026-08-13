@@ -59,13 +59,13 @@ export function matchesFieldCondition(field: FieldRule, row: DataRow) {
   return condition.combinator === 'or' ? matches.some(Boolean) : matches.every(Boolean)
 }
 
-function modeValue(field:FieldRule,rowIndex:number,mode:DataMode,pools:Record<string,string[]>,totalRows=1) {
+function modeValue(field:FieldRule,rowIndex:number,mode:DataMode,pools:Record<string,string[]>,totalRows=1,referenceDate?:string) {
   if(mode==='boundary') return boundaryValue(field,rowIndex)
-  return generateValue(field,rowIndex,pools,{mode,totalRows})
+  return generateValue(field,rowIndex,pools,{mode,totalRows,referenceDate})
 }
 
 export function generateProject(project:ProjectSchema,pools:Record<string,string[]>={}):GenerateResult {
-  const started=performance.now(); reseed(project.seed); const random=seeded(project.seed); const data:GeneratedData={}; const sorted=sortTables(project.tables)
+  const started=performance.now(); reseed(project.seed,project.referenceDate); const random=seeded(project.seed); const data:GeneratedData={}; const sorted=sortTables(project.tables)
   for(const table of sorted) {
     const cardinality=planTableCardinality(table,data,project.seed),rowCount=cardinality.count
     const rows:DataRow[]=[]; const uniqueMap=new Map<string,Set<unknown>>()
@@ -76,11 +76,11 @@ export function generateProject(project:ProjectSchema,pools:Record<string,string
         let value:unknown;const referenceParents=field.ref?data[field.ref.tableId]||[]:[]
         if(field.ref) {
           value=field.id===cardinality.referenceFieldId?referenceParents[cardinality.parentRowIndexes[i]]?.[field.ref.field]??null:selectReferenceValue(field.ref,i,referenceParents,random)
-        } else value=modeValue(field,i,project.mode,pools,rowCount)
+        } else value=modeValue(field,i,project.mode,pools,rowCount,project.referenceDate)
         if(field.nullable && random()*100<field.nullable) value=null
         if(field.unique) {
           const used=uniqueMap.get(field.name)??new Set(); let tries=0
-          while(used.has(value)&&tries++<Math.max(50,referenceParents.length*2)) value=field.ref?selectReferenceValue(field.ref,i+tries+hash(field.id),referenceParents,random):modeValue(field,i+tries+hash(field.id),project.mode,pools,rowCount)
+          while(used.has(value)&&tries++<Math.max(50,referenceParents.length*2)) value=field.ref?selectReferenceValue(field.ref,i+tries+hash(field.id),referenceParents,random):modeValue(field,i+tries+hash(field.id),project.mode,pools,rowCount,project.referenceDate)
           used.add(value); uniqueMap.set(field.name,used)
         }
         if(field.prefix&&value!=null) value=field.prefix+value
@@ -122,13 +122,13 @@ export function supplementCoverageGaps(project:ProjectSchema,data:GeneratedData,
     const rows=nextData[table.id]||[],uniqueMap=new Map(table.fields.filter(field=>field.unique||field.primaryKey).map(field=>[field.name,new Set(rows.map(row=>row[field.name]))]))
     const capacityField=table.fields.find(field=>field.ref&&(field.ref.strategy==='oneToOne'||field.unique||field.primaryKey)&&(nextData[field.ref.tableId]||[]).length<rows.length+needed)
     if(capacityField)throw new Error(`${table.label}.${capacityField.label} 的唯一引用容量不足，无法追加 ${needed} 条覆盖数据`)
-    reseed((project.seed+hash(table.id)+rows.length)>>>0);const random=seeded((project.seed^hash(table.id)^rows.length)>>>0)
+    reseed((project.seed+hash(table.id)+rows.length)>>>0,project.referenceDate);const random=seeded((project.seed^hash(table.id)^rows.length)>>>0)
     for(let offset=0;offset<needed;offset++){
       const rowIndex=rows.length,row:DataRow={}
       for(const field of table.fields){
         let value:unknown;const referenceParents=field.ref?nextData[field.ref.tableId]||[]:[]
-        if(field.ref)value=selectReferenceValue(field.ref,rowIndex,referenceParents,random);else value=modeValue(field,rowIndex,project.mode,pools,rows.length+needed)
-        if(field.unique||field.primaryKey){const used=uniqueMap.get(field.name)??new Set<unknown>();let tries=0;while(used.has(value)&&tries++<Math.max(100,referenceParents.length*2))value=field.ref?selectReferenceValue(field.ref,rowIndex+tries+hash(field.id),referenceParents,random):modeValue(field,rowIndex+tries+hash(field.id),project.mode,pools,rows.length+needed);used.add(value);uniqueMap.set(field.name,used)}
+        if(field.ref)value=selectReferenceValue(field.ref,rowIndex,referenceParents,random);else value=modeValue(field,rowIndex,project.mode,pools,rows.length+needed,project.referenceDate)
+        if(field.unique||field.primaryKey){const used=uniqueMap.get(field.name)??new Set<unknown>();let tries=0;while(used.has(value)&&tries++<Math.max(100,referenceParents.length*2))value=field.ref?selectReferenceValue(field.ref,rowIndex+tries+hash(field.id),referenceParents,random):modeValue(field,rowIndex+tries+hash(field.id),project.mode,pools,rows.length+needed,project.referenceDate);used.add(value);uniqueMap.set(field.name,used)}
         if(field.prefix&&value!=null)value=field.prefix+value;if(field.suffix&&value!=null)value=String(value)+field.suffix;row[field.name]=value
       }
       for(const{gap,start}of scheduled){const valueIndex=offset-start;if(valueIndex<0||valueIndex>=gap.missingValues.length)continue;const field=table.fields.find(candidate=>candidate.id===gap.fieldId);if(!field)continue;if(gap.kind==='missing')delete row[field.name];else row[field.name]=gap.missingValues[valueIndex]}
@@ -146,14 +146,14 @@ export function supplementCoverageGaps(project:ProjectSchema,data:GeneratedData,
 export function regenerateDataRow(project:ProjectSchema,data:GeneratedData,tableId:string,rowIndex:number,pools:Record<string,string[]>={},lockedFields:string[]=[],nonce=Date.now()):DataRow {
   const table=project.tables.find(candidate=>candidate.id===tableId);if(!table)throw new Error('要重新生成的数据表不存在')
   const original=data[tableId]?.[rowIndex]||{},locked=new Set([...lockedFields,...table.fields.filter(field=>field.primaryKey).map(field=>field.name)]),row:DataRow={}
-  reseed((project.seed+hash(tableId)+rowIndex+nonce)>>>0);const random=seeded((project.seed^hash(tableId)^rowIndex^nonce)>>>0)
+  reseed((project.seed+hash(tableId)+rowIndex+nonce)>>>0,project.referenceDate);const random=seeded((project.seed^hash(tableId)^rowIndex^nonce)>>>0)
   for(const field of table.fields){
     if(locked.has(field.name)){if(Object.prototype.hasOwnProperty.call(original,field.name))row[field.name]=original[field.name];continue}
     if(field.missing&&random()*100<field.missing)continue
     let value:unknown;const referenceParents=field.ref?data[field.ref.tableId]||[]:[]
-    if(field.ref)value=selectReferenceValue(field.ref,rowIndex,referenceParents,random);else value=modeValue(field,rowIndex+nonce%10_000,project.mode,pools,table.count)
+    if(field.ref)value=selectReferenceValue(field.ref,rowIndex,referenceParents,random);else value=modeValue(field,rowIndex+nonce%10_000,project.mode,pools,table.count,project.referenceDate)
     if(field.nullable&&random()*100<field.nullable)value=null
-    if(field.unique){const used=new Set((data[tableId]||[]).filter((_,index)=>index!==rowIndex).map(candidate=>candidate[field.name]));let tries=0;while(used.has(value)&&tries++<Math.max(100,referenceParents.length*2))value=field.ref?selectReferenceValue(field.ref,rowIndex+nonce%10_000+tries+hash(field.id),referenceParents,random):modeValue(field,rowIndex+nonce%10_000+tries+hash(field.id),project.mode,pools,table.count)}
+    if(field.unique){const used=new Set((data[tableId]||[]).filter((_,index)=>index!==rowIndex).map(candidate=>candidate[field.name]));let tries=0;while(used.has(value)&&tries++<Math.max(100,referenceParents.length*2))value=field.ref?selectReferenceValue(field.ref,rowIndex+nonce%10_000+tries+hash(field.id),referenceParents,random):modeValue(field,rowIndex+nonce%10_000+tries+hash(field.id),project.mode,pools,table.count,project.referenceDate)}
     if(field.prefix&&value!=null)value=field.prefix+value;if(field.suffix&&value!=null)value=String(value)+field.suffix;row[field.name]=value
   }
   orderFormulaFields(table.fields).filter(field=>!locked.has(field.name)).forEach(field=>{row[field.name]=evaluateFormula(field.formula!,row)})

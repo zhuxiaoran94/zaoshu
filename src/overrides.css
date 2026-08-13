@@ -8,6 +8,16 @@
   animation: pulse 1s infinite alternate;
 }
 
+.reference-date-control { display: flex; align-items: center; gap: 6px; margin-left: auto; margin-right: 18px; padding-left: 14px; border-left: 1px solid var(--line); }
+.reference-date-control > svg { width: 15px; color: var(--teal); }
+.reference-date-control label { display: flex; flex-direction: column; gap: 1px; }
+.reference-date-control label span { color: var(--muted); font-size: 8px; }
+.reference-date-control input { width: 112px; border: 0; background: transparent; padding: 0; color: var(--ink); font: 9px ui-monospace, monospace; }
+.reference-date-control button { border: 0; border-radius: 5px; background: #e5f2f1; padding: 5px 7px; color: #17656b; font-size: 8px; white-space: nowrap; }
+.reference-date-control + .run-stats { margin-left: 0; min-width: 160px; }
+@media (max-width: 1180px) { .reference-date-control { margin-right: 8px; }.reference-date-control button { display: none; }.reference-date-control + .run-stats { min-width: 130px; } }
+@media (max-width: 980px) { .reference-date-control { display: none; } }
+
 @keyframes pulse {
   to { opacity: .35; transform: scale(.86); }
 }

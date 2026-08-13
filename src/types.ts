@@ -99,6 +99,7 @@ export interface ProjectSchema {
   templateId: string
   description: string
   seed: number
+  referenceDate?: string
   mode: DataMode
   version: string
   tables: TableSchema[]

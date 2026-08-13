@@ -86,6 +86,7 @@ const projectSchema = z.object({
   templateId: z.string().max(80),
   description: z.string().max(500),
   seed: z.number().int().min(0).max(2_147_483_647),
+  referenceDate: z.string().datetime({ offset: true }).optional(),
   mode: z.enum(['random', 'realistic', 'boundary', 'exception', 'pairwise']),
   version: z.string().min(1).max(20),
   tables: z.array(tableSchema).min(1).max(MAX_TABLES),

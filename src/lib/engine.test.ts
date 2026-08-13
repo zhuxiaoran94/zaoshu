@@ -8,6 +8,24 @@ import { parseProjectFile, serializeProject } from './projectConfig'
 import type { FieldRule } from '../types'
 
 describe('Mock造数引擎',()=>{
+  it('时间基准控制相对日期、时间戳、生日和编号且可复现',()=>{
+    const project=cloneTemplate('testing'),table=project.tables[0];project.referenceDate='2030-05-20T12:34:56.000Z';table.count=6;table.fields=[
+      {id:'past',name:'past',label:'过去',generator:'pastDate',dataType:'date'},
+      {id:'future',name:'future',label:'未来',generator:'futureDate',dataType:'date'},
+      {id:'recent',name:'recent',label:'时间戳',generator:'timestamp',dataType:'number'},
+      {id:'birthday',name:'birthday',label:'生日',generator:'birthday',dataType:'date'},
+      {id:'order',name:'orderNo',label:'订单号',generator:'orderNo',dataType:'string'},
+      {id:'template',name:'code',label:'模板',generator:'template',dataType:'string',format:'CASE-{date}-{seq}'},
+    ];project.tables=[table]
+    const first=generateProject(project).data[table.id],second=generateProject(project).data[table.id],anchor=Date.parse(project.referenceDate)
+    expect(first).toEqual(second);expect(first.every(row=>Date.parse(String(row.past))<=anchor&&Date.parse(String(row.future))>=anchor&&Number(row.recent)<=anchor)).toBe(true)
+    expect(first[0]).toMatchObject({orderNo:'ORD2030052000000001',code:'CASE-20300520-000001'})
+  })
+  it('改变时间基准会稳定改变相对时间结果',()=>{
+    const project=cloneTemplate('users');project.tables=project.tables.slice(0,1);project.tables[0].count=2;project.referenceDate='2028-01-01T00:00:00.000Z';const first=generateProject(project).data.users
+    project.referenceDate='2032-01-01T00:00:00.000Z';const second=generateProject(project).data.users
+    expect(first).not.toEqual(second);expect(first.every(row=>Date.parse(String(row.registeredAt))<=Date.parse('2028-01-01T00:00:00Z'))).toBe(true);expect(second.every(row=>Date.parse(String(row.registeredAt))<=Date.parse('2032-01-01T00:00:00Z'))).toBe(true)
+  })
   it('相同随机种子生成一致结果',()=>{
     const project=cloneTemplate('commerce');project.tables.forEach(t=>t.count=4)
     const a=generateProject(project).data
@@ -117,6 +135,7 @@ describe('Mock造数引擎',()=>{
     expect(events.filter(event=>event.stayMinutes!==null).every(event=>event.stayMinutes!>=15&&event.stayMinutes!<=30)).toBe(true)
     expect(generateStateEvents('order',3,42,options)).toEqual(events)
   })
+  it('状态链使用项目可复现时间基准',()=>{const a=generateStateEvents('payment',1,42,{referenceDate:'2030-01-02T00:00:00.000Z'}),b=generateStateEvents('payment',1,42,{referenceDate:'2031-01-02T00:00:00.000Z'});expect(a).not.toEqual(b);expect(a[0].occurredAt.startsWith('2030-01-01')).toBe(true)})
   it('状态链可定向注入倒退、跳过和重复事件',()=>{
     for(const errorMode of ['rollback','skip','duplicate'] as const){
       const events=generateStateEvents('logistics',4,42,{errorMode})
@@ -147,7 +166,7 @@ describe('Mock造数引擎',()=>{
     const project=cloneTemplate('testing');project.tables.forEach(table=>table.count=2);const result=generateProject(project),pack=await createExportPackage('csv',project,result.data,result.report,'api_requests'),bytes=new Uint8Array(await pack.blob.arrayBuffer())
     expect(new DataView(bytes.buffer).getUint32(0,true)).toBe(0x04034b50)
     expect(new TextDecoder().decode(bytes)).toContain('manifest.json')
-    expect(pack.manifest.files[0]).toMatchObject({name:expect.stringContaining('.csv'),bytes:expect.any(Number),sha256:expect.stringMatching(/^[a-f0-9]{64}$/)})
+    expect(pack.manifest.referenceDate).toBe(project.referenceDate);expect(pack.manifest.files[0]).toMatchObject({name:expect.stringContaining('.csv'),bytes:expect.any(Number),sha256:expect.stringMatching(/^[a-f0-9]{64}$/)})
     expect(createZip([{name:'中文.txt',content:'测试'}]).length).toBeGreaterThan(40)
     expect(sha256Fallback(new TextEncoder().encode('abc'))).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad')
   })

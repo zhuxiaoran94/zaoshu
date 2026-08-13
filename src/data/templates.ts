@@ -3,7 +3,7 @@ import type { FieldRule, ProjectSchema, TableSchema } from '../types'
 let n = 0
 const f = (name:string,label:string,generator:string,dataType:FieldRule['dataType']='string', extra:Partial<FieldRule>={}):FieldRule => ({ id:`f_${++n}`,name,label,generator,dataType,...extra })
 const t = (id:string,name:string,label:string,count:number,fields:FieldRule[]):TableSchema => ({id,name,label,count,fields})
-const project = (id:string,name:string,description:string,tables:TableSchema[]):ProjectSchema => ({id:`project_${id}`,name,templateId:id,description,seed:20250814,mode:'random',version:'1.0',tables})
+const project = (id:string,name:string,description:string,tables:TableSchema[]):ProjectSchema => ({id:`project_${id}`,name,templateId:id,description,seed:20250814,referenceDate:'2026-08-14T00:00:00.000Z',mode:'random',version:'1.0',tables})
 
 const userFields = () => [f('id','用户 ID','autoId','number',{primaryKey:true,unique:true,min:10001}),f('name','姓名','chineseName'),f('phone','手机号','phone','string',{unique:true}),f('email','邮箱','email'),f('memberLevel','会员等级','memberLevel','string',{weights:[70,20,8,2]}),f('status','用户状态','userStatus','string',{weights:[84,8,3,5]}),f('registeredAt','注册时间','pastDate','date',{distribution:'longTail'})]
 

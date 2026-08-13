@@ -7,14 +7,17 @@ const pick = <T>(items: T[], index?: number): T => items[(index ?? faker.number.
 const pad = (n: number, width = 6) => String(n).padStart(width, '0')
 const randomDigits = (len: number) => Array.from({ length: len }, () => faker.number.int({ min: 0, max: 9 })).join('')
 const cnWords = ['质量','星河','智造','远航','敏捷','数智','云端','先锋','卓越','未来','协同','守护']
-const DETERMINISTIC_EPOCH = 1755129600000
+export const DEFAULT_REFERENCE_DATE = '2026-08-14T00:00:00.000Z'
+const referenceDate=(value?:string)=>{const date=new Date(value??DEFAULT_REFERENCE_DATE);return Number.isFinite(date.getTime())?date:new Date(DEFAULT_REFERENCE_DATE)}
+const shiftUtcYear=(source:Date,years:number)=>{const result=new Date(source);result.setUTCFullYear(result.getUTCFullYear()+years);return result}
+const compactDate=(source:Date)=>source.toISOString().slice(0,10).replaceAll('-','')
 const isoDate = (d: Date, withTime = false) => withTime ? d.toISOString() : d.toISOString().slice(0,10)
 const boundedNumber = (rule: FieldRule, defaultMin = 0, defaultMax = 100) => {
   const min = rule.min ?? defaultMin; const max = rule.max ?? defaultMax
   return rule.precision ? Number(faker.number.float({ min, max, fractionDigits: rule.precision }).toFixed(rule.precision)) : faker.number.int({ min, max })
 }
 
-export interface GenerateValueContext { mode?:'random'|'realistic'|'boundary'|'exception'|'pairwise'; totalRows?:number }
+export interface GenerateValueContext { mode?:'random'|'realistic'|'boundary'|'exception'|'pairwise'; totalRows?:number; referenceDate?:string }
 const weightedIndex=(length:number,weights?:number[])=>{if(!weights||weights.length!==length||!weights.some(weight=>weight>0))return faker.number.int({min:0,max:length-1});const total=weights.reduce((sum,weight)=>sum+Math.max(0,weight),0);let cursor=faker.number.float({min:0,max:total});for(let index=0;index<weights.length;index++){cursor-=Math.max(0,weights[index]);if(cursor<=0)return index}return length-1}
 const relativeCenter=(center:number|undefined,min:number,max:number,fallback=.5)=>center===undefined?fallback:Math.max(0,Math.min(1,(center-min)/Math.max(max-min,1e-9)))
 const distributedNumber=(rule:FieldRule,rowIndex:number,totalRows:number,defaultMin=0,defaultMax=100)=>{const min=rule.min??defaultMin,max=rule.max??defaultMax,range=max-min,distribution=rule.distribution||'uniform';let ratio:number
@@ -32,19 +35,19 @@ const distributedDate=(rule:FieldRule,rowIndex:number,totalRows:number,from:stri
 }
 
 export function generateValue(rule: FieldRule, rowIndex: number, pools: Record<string,string[]> = {}, context:GenerateValueContext = {}): unknown {
-  const g = rule.generator
+  const g = rule.generator,anchor=referenceDate(context.referenceDate),anchorTime=anchor.getTime(),dateToken=compactDate(anchor)
   if (rule.fixedValue !== undefined && rule.fixedValue !== '') {if(rule.dataType==='object'){try{return JSON.parse(rule.fixedValue)}catch{return{}}}return rule.fixedValue}
   if (g === 'customEnum' && rule.values?.length) {const value=context.mode==='realistic'?(rule.values[weightedIndex(rule.values.length,rule.weights)]):pick(rule.values,rowIndex);if(rule.dataType==='number'){const number=Number(value);return Number.isFinite(number)?number:value}if(rule.dataType==='boolean'&&['true','false'].includes(value))return value==='true';return value}
   if (g === 'dataPool') {const values=pools[rule.fixedValue || ''] || ['未配置数据池'];return context.mode==='realistic'?values[weightedIndex(values.length,rule.weights)]:pick(values,rowIndex)}
   if (ENUM_VALUES[g]) {const values=ENUM_VALUES[g];if(context.mode==='realistic'&&(rule.weights?.length===values.length||rule.distribution==='hotspot'))return values[weightedIndex(values.length,rule.weights||[70,...Array(Math.max(0,values.length-1)).fill(30/Math.max(1,values.length-1))])];return pick(values,rowIndex)}
   if (['autoId','sequence'].includes(g)) return (rule.min ?? 1) + rowIndex * (rule.max ?? 1)
   if (g === 'uuid') return faker.string.uuid()
-  if (g === 'ulid') return `${(DETERMINISTIC_EPOCH+rowIndex).toString(36).toUpperCase()}${faker.string.alphanumeric(16).toUpperCase()}`.slice(0,26)
-  if (g === 'snowflake') return String(BigInt(DETERMINISTIC_EPOCH) * 100000n + BigInt(rowIndex + 1))
+  if (g === 'ulid') return `${(anchorTime+rowIndex).toString(36).toUpperCase()}${faker.string.alphanumeric(16).toUpperCase()}`.slice(0,26)
+  if (g === 'snowflake') return String(BigInt(anchorTime) * 100000n + BigInt(rowIndex + 1))
   if (['traceId','sessionId'].includes(g)) return faker.string.hexadecimal({ length: 32, prefix: '' }).toLowerCase()
   if (g === 'spanId') return faker.string.hexadecimal({ length: 16, prefix: '' }).toLowerCase()
-  if (g === 'orderNo') return `ORD20250814${pad(rowIndex+1,8)}`
-  if (g === 'transactionNo') return `TXN${DETERMINISTIC_EPOCH+rowIndex}${pad(rowIndex+1,5)}`
+  if (g === 'orderNo') return `ORD${dateToken}${pad(rowIndex+1,8)}`
+  if (g === 'transactionNo') return `TXN${anchorTime+rowIndex}${pad(rowIndex+1,5)}`
   if (g === 'accountNo') return `AC${randomDigits(14)}`
   if (['sku','productCode'].includes(g)) return `${g==='sku'?'SKU':'PRD'}-${faker.string.alpha({ length: 3, casing: 'upper' })}-${pad(rowIndex+1)}`
   if (g === 'chineseName') return faker.person.fullName()
@@ -54,7 +57,7 @@ export function generateValue(rule: FieldRule, rowIndex: number, pools: Record<s
   if (g === 'nickname') return `${pick(cnWords)}_${faker.string.alphanumeric(4)}`
   if (g === 'username') return faker.internet.username()
   if (g === 'age') return context.mode==='realistic'?distributedNumber(rule,rowIndex,context.totalRows??1,18,70):boundedNumber(rule,18,70)
-  if (g === 'birthday') return isoDate(faker.date.birthdate({ min: 18, max: 70, mode:'age' }))
+  if (g === 'birthday') return isoDate(faker.date.birthdate({ min: 18, max: 70, mode:'age', refDate:anchor }))
   if (g === 'phone') return `1${pick(['3','5','6','7','8','9'])}${randomDigits(9)}`
   if (g === 'telephone') return `0${faker.number.int({min:10,max:99})}-${randomDigits(8)}`
   if (g === 'email') return faker.internet.email().toLowerCase()
@@ -99,19 +102,20 @@ export function generateValue(rule: FieldRule, rowIndex: number, pools: Record<s
   if (g === 'stockCode') return String(faker.number.int({min:1,max:999999})).padStart(6,'0')
   if (g === 'fundCode') return String(faker.number.int({min:1,max:999999})).padStart(6,'0')
   if (['date','pastDate','futureDate','workday','weekend','monthStart','monthEnd','dateTime'].includes(g)) {
+    const past=shiftUtcYear(anchor,-3),future=shiftUtcYear(anchor,3),generalEnd=shiftUtcYear(anchor,1)
     let d = context.mode==='realistic'
-      ? distributedDate(rule,rowIndex,context.totalRows??1,g==='futureDate'?'2026-08-14':g==='pastDate'?'2023-01-01':'2023-01-01',g==='pastDate'?'2026-08-14':g==='futureDate'?'2029-12-31':'2027-12-31')
-      : g==='futureDate' ? faker.date.future() : g==='pastDate' ? faker.date.past() : faker.date.between({from:'2023-01-01',to:'2027-12-31'})
-    if(g==='workday') while([0,6].includes(d.getDay())) d.setDate(d.getDate()+1)
-    if(g==='weekend') while(![0,6].includes(d.getDay())) d.setDate(d.getDate()+1)
-    if(g==='monthStart') d.setDate(1)
-    if(g==='monthEnd') d = new Date(d.getFullYear(),d.getMonth()+1,0)
+      ? distributedDate(rule,rowIndex,context.totalRows??1,g==='futureDate'?anchor.toISOString():past.toISOString(),g==='pastDate'?anchor.toISOString():g==='futureDate'?future.toISOString():generalEnd.toISOString())
+      : g==='futureDate' ? faker.date.future({refDate:anchor}) : g==='pastDate' ? faker.date.past({refDate:anchor}) : faker.date.between({from:past,to:generalEnd})
+    if(g==='workday') while([0,6].includes(d.getUTCDay())) d.setUTCDate(d.getUTCDate()+1)
+    if(g==='weekend') while(![0,6].includes(d.getUTCDay())) d.setUTCDate(d.getUTCDate()+1)
+    if(g==='monthStart') d.setUTCDate(1)
+    if(g==='monthEnd') d = new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth()+1,0))
     return isoDate(d,g==='dateTime')
   }
   if (g === 'time') return `${pad(faker.number.int({min:0,max:23}),2)}:${pad(faker.number.int({min:0,max:59}),2)}:${pad(faker.number.int({min:0,max:59}),2)}`
-  if (g === 'timestamp') return faker.date.recent().getTime()
-  if (g === 'quarter') return `${faker.number.int({min:2024,max:2027})}-Q${faker.number.int({min:1,max:4})}`
-  if (g === 'fiscalYear') return `FY${faker.number.int({min:2024,max:2028})}`
+  if (g === 'timestamp') return faker.date.recent({refDate:anchor}).getTime()
+  if (g === 'quarter') return `${faker.number.int({min:anchor.getUTCFullYear()-2,max:anchor.getUTCFullYear()+1})}-Q${faker.number.int({min:1,max:4})}`
+  if (g === 'fiscalYear') return `FY${faker.number.int({min:anchor.getUTCFullYear()-2,max:anchor.getUTCFullYear()+2})}`
   if (g === 'chineseWord') return pick(cnWords)
   if (['chineseSentence','newsTitle','articleTitle'].includes(g)) return `${pick(cnWords)}${pick(['平台','计划','报告','实践','观察'])}：${pick(['让数据更可信','构建稳定体验','洞察业务增长'])}`
   if (g === 'chineseParagraph') return `${pick(cnWords)}连接业务与技术。通过清晰的规则、稳定的数据和可追溯的过程，让每一次验证更有价值。`
@@ -139,9 +143,9 @@ export function generateValue(rule: FieldRule, rowIndex: number, pools: Record<s
   if (g === 'mimeType') return pick(['application/pdf','image/png','text/csv','application/json'])
   if (g === 'fileSize') return context.mode==='realistic'?distributedNumber(rule,rowIndex,context.totalRows??1,1024,104857600):boundedNumber(rule,1024,104857600)
   if (g === 'treePath') return `/总部/${pick(['研发','质量','产品'])}/${pick(['一组','二组','平台组'])}`
-  if (g === 'template') return (rule.format || '{date}-{seq}').replace('{date}','20250814').replace('{seq}',pad(rowIndex+1))
+  if (g === 'template') return (rule.format || '{date}-{seq}').replaceAll('{date}',dateToken).replaceAll('{seq}',pad(rowIndex+1))
   if (g === 'fixed') return rule.fixedValue ?? ''
   return faker.string.alphanumeric(rule.length??10)
 }
 
-export function reseed(seed: number) { faker.seed(seed) }
+export function reseed(seed: number, anchor=DEFAULT_REFERENCE_DATE) { faker.seed(seed);faker.setDefaultRefDate(referenceDate(anchor)) }
