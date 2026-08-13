@@ -7,6 +7,7 @@ const clean=(row:DataRow)=>Object.fromEntries(Object.entries(row).filter(([key])
 const primary=(table:TableSchema)=>table.fields.find(field=>field.primaryKey)??table.fields.find(field=>field.unique)??table.fields.find(field=>field.name==='id')??table.fields[0]
 const literal=(value:unknown)=>JSON.stringify(value,null,2).replaceAll('</','<\\/')
 const relationSpecs=(project:ProjectSchema)=>project.tables.flatMap(child=>child.fields.filter(field=>field.ref).map(field=>{const parent=project.tables.find(table=>table.id===field.ref!.tableId);return parent?{parent:parent.name,child:child.name,foreignKey:field.name,parentField:field.ref!.field}:null}).filter((relation):relation is NonNullable<typeof relation>=>Boolean(relation))).map((relation,_,all)=>{const duplicate=all.filter(candidate=>candidate.parent===relation.parent&&candidate.child===relation.child).length>1,path=`/api/${relation.parent}/:id/${relation.child}${duplicate?`/by-${relation.foreignKey}`:''}`;return{...relation,path,openApiPath:path.replace(':id','{id}')}})
+const packageName=(value:string)=>value.toLocaleLowerCase().replace(/[^a-z0-9-]+/g,'-').replace(/^-+|-+$/g,'').slice(0,80)||'mock-api-project'
 
 export function mockApiRoutes(project:ProjectSchema,options?:Partial<MockApiOptions>){
   const behavior=normalizeMockApiOptions(options)
@@ -26,7 +27,19 @@ export function mockApiRoutes(project:ProjectSchema,options?:Partial<MockApiOpti
 
 export function mockApiConfig(project:ProjectSchema,options?:Partial<MockApiOptions>){
   const config={seed:project.seed,...normalizeMockApiOptions(options)}
-  return`export const mockApiOptions = ${JSON.stringify(config,null,2)} as const\n`
+  return`export type MockApiRuntimeOptions = {
+  seed: number
+  latencyMinMs: number
+  latencyMaxMs: number
+  failureRate: number
+  failureStatus: number
+  envelope: 'plain' | 'data' | 'data-meta'
+  validateForeignKeys: boolean
+  deletePolicy: 'restrict' | 'cascade'
+  nestedRoutes: boolean
+}
+
+export const mockApiOptions: MockApiRuntimeOptions = ${JSON.stringify(config,null,2)}\n`
 }
 
 export function mockApiHandlers(project:ProjectSchema,data:GeneratedData,_options?:Partial<MockApiOptions>){
@@ -36,7 +49,7 @@ export function mockApiHandlers(project:ProjectSchema,data:GeneratedData,_option
     return`  { resource: ${JSON.stringify(table.name)}, key: ${JSON.stringify(key.name)}, numericKey: ${key.dataType==='number'}, fields: ${JSON.stringify(table.fields.map(field=>field.name))} },`
   }).join('\n')
   const relationDefinitions=relationSpecs(project).map(relation=>`  { child: ${JSON.stringify(relation.child)}, childField: ${JSON.stringify(relation.foreignKey)}, parent: ${JSON.stringify(relation.parent)}, parentField: ${JSON.stringify(relation.parentField)}, path: ${JSON.stringify(relation.path)} },`).join('\n')
-  return `import { http, HttpResponse } from 'msw'
+  return `import { http, HttpResponse, type JsonBodyType } from 'msw'
 import { mockApiOptions } from './config'
 
 type MockRecord = Record<string, unknown>
@@ -68,12 +81,13 @@ const allowedBody = (body: MockRecord, resource: ResourceDefinition) =>
   Object.fromEntries(Object.entries(body).filter(([field]) => resource.fields.includes(field)))
 const errorResponse = (status: number, message: string) =>
   HttpResponse.json({ error: { status, message } }, { status })
-const wrapped = (data: unknown, meta?: MockRecord) =>
+const wrapped = (data: unknown, meta?: MockRecord): JsonBodyType => (
   mockApiOptions.envelope === 'plain'
     ? data
     : mockApiOptions.envelope === 'data'
       ? { data }
       : { data, meta: meta ?? {} }
+) as JsonBodyType
 
 const invalidReference = (body: MockRecord, resource: ResourceDefinition) => {
   if (!mockApiOptions.validateForeignKeys) return null
@@ -138,7 +152,7 @@ export const resetMockData = () => {
 }
 
 export const handlers = resources.flatMap(resource => [
-  http.get('/api/' + resource.resource, ({ request }) => withNetwork(request, () => {
+  http.get('*/api/' + resource.resource, ({ request }) => withNetwork(request, () => {
     const url = new URL(request.url)
     const query = (url.searchParams.get('q') ?? '').toLocaleLowerCase()
     let rows = [...db[resource.resource]]
@@ -166,11 +180,11 @@ export const handlers = resources.flatMap(resource => [
       { headers: { 'X-Total-Count': String(rows.length) } },
     )
   })),
-  http.get('/api/' + resource.resource + '/:id', ({ params, request }) => withNetwork(request, () => {
+  http.get('*/api/' + resource.resource + '/:id', ({ params, request }) => withNetwork(request, () => {
     const row = db[resource.resource].find(item => sameId(item[resource.key], params.id))
     return row ? HttpResponse.json(wrapped(row)) : errorResponse(404, 'Not found')
   })),
-  http.post('/api/' + resource.resource, ({ request }) => withNetwork(request, async () => {
+  http.post('*/api/' + resource.resource, ({ request }) => withNetwork(request, async () => {
     const input = await jsonBody(request)
     if (!input) return errorResponse(400, 'JSON object required')
     const body = allowedBody(input, resource)
@@ -187,7 +201,7 @@ export const handlers = resources.flatMap(resource => [
     db[resource.resource].push(body)
     return HttpResponse.json(wrapped(body), { status: 201 })
   })),
-  http.patch('/api/' + resource.resource + '/:id', ({ params, request }) => withNetwork(request, async () => {
+  http.patch('*/api/' + resource.resource + '/:id', ({ params, request }) => withNetwork(request, async () => {
     const index = db[resource.resource].findIndex(item => sameId(item[resource.key], params.id))
     const input = await jsonBody(request)
     if (index < 0) return errorResponse(404, 'Not found')
@@ -203,7 +217,7 @@ export const handlers = resources.flatMap(resource => [
     }
     return HttpResponse.json(wrapped(db[resource.resource][index]))
   })),
-  http.delete('/api/' + resource.resource + '/:id', ({ params, request }) => withNetwork(request, () => {
+  http.delete('*/api/' + resource.resource + '/:id', ({ params, request }) => withNetwork(request, () => {
     const index = db[resource.resource].findIndex(item => sameId(item[resource.key], params.id))
     if (index < 0) return errorResponse(404, 'Not found')
     const dependents = dependentRows(resource, db[resource.resource][index])
@@ -217,7 +231,7 @@ export const handlers = resources.flatMap(resource => [
 ])
 
 const relationHandlers = mockApiOptions.nestedRoutes ? relations.map(relation =>
-  http.get(relation.path, ({ params, request }) => withNetwork(request, () => {
+  http.get('*' + relation.path, ({ params, request }) => withNetwork(request, () => {
     const parentResource = resourceByName.get(relation.parent)
     if (!parentResource) return errorResponse(404, 'Parent resource not found')
     const parent = db[relation.parent].find(row => sameId(row[parentResource.key], params.id))
@@ -250,7 +264,17 @@ export function mockApiReadme(project:ProjectSchema,options?:Partial<MockApiOpti
 
 可以直接修改 \`config.ts\` 调整这些值，范围已在导出时限制为延迟 0–10,000 ms、失败率 0–100%、状态码 400–599。
 
-## 快速接入 MSW v2
+## 独立运行测试
+
+\`\`\`bash
+npm install
+npm run typecheck
+npm test
+\`\`\`
+
+包内测试会真实启动 MSW Node server，验证分页、CRUD、复位、外键、删除策略和嵌套路由。
+
+## 接入已有项目
 
 \`\`\`bash
 npm install -D msw
@@ -290,6 +314,8 @@ ${nested.length?`### 父子嵌套查询\n\n${nested.map(route=>`- \`GET ${route.
 ## 文件
 
 - \`db.json\`：可直接读取或交给 json-server 等兼容工具。
+- \`package.json\` / \`tsconfig.json\` / \`vitest.config.ts\`：独立可运行的测试工程配置，依赖使用精确版本。
+- \`handlers.test.ts\`：真实请求验证分页、CRUD、复位与关系策略。
 - \`config.ts\`：种子、延迟、失败率、失败状态码和响应格式。
 - \`handlers.ts\`：内存 CRUD、分页、搜索、字段筛选、排序与网络场景实现。
 - \`browser.ts\` / \`server.ts\`：浏览器和 Node 测试入口。
@@ -298,10 +324,25 @@ ${nested.length?`### 父子嵌套查询\n\n${nested.map(route=>`- \`GET ${route.
 `
 }
 
+export function mockApiSmokeTests(project:ProjectSchema){
+  const first=project.tables[0],firstPrimary=primary(first),relations=relationSpecs(project),relation=relations[0]
+  const [nestedBefore,nestedAfter]=relation?.path.split(':id')??['','']
+  return `import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'\nimport { mockApiOptions } from './config'\nimport { db } from './handlers'\nimport { resetMockData, server } from './server'\n\nconst origin = 'http://localhost'\nconst unwrap = (body: unknown) => body && typeof body === 'object' && 'data' in body ? (body as { data: unknown }).data : body\n\nbeforeAll(() => { Object.assign(mockApiOptions, { latencyMinMs: 0, latencyMaxMs: 0, failureRate: 0 }); server.listen({ onUnhandledRequest: 'error' }) })\nafterEach(() => { server.resetHandlers(); resetMockData() })\nafterAll(() => server.close())\n\ndescribe(${JSON.stringify(project.name+' Mock API')}, () => {\n  it('列表支持分页并返回总数', async () => {\n    const response = await fetch(origin + ${JSON.stringify(`/api/${first.name}?_page=1&_limit=2`)})\n    expect(response.status).toBe(200)\n    expect(Number(response.headers.get('X-Total-Count'))).toBe(db[${JSON.stringify(first.name)}].length)\n    expect(unwrap(await response.json())).toHaveLength(Math.min(2, db[${JSON.stringify(first.name)}].length))\n  })\n\n  it('完成新增、修改、删除并可复位', async () => {\n    const createdResponse = await fetch(origin + ${JSON.stringify(`/api/${first.name}`)}, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })\n    expect(createdResponse.status).toBe(201)\n    const created = unwrap(await createdResponse.json()) as Record<string, unknown>, id = created[${JSON.stringify(firstPrimary.name)}]\n    const patchedResponse = await fetch(origin + ${JSON.stringify(`/api/${first.name}/`)} + id, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ${JSON.stringify(firstPrimary.name)}: 'cannot-change' }) })\n    expect(patchedResponse.status).toBe(200)\n    expect((unwrap(await patchedResponse.json()) as Record<string, unknown>)[${JSON.stringify(firstPrimary.name)}]).toBe(id)\n    expect((await fetch(origin + ${JSON.stringify(`/api/${first.name}/`)} + id, { method: 'DELETE' })).status).toBe(200)\n    resetMockData(); expect(db[${JSON.stringify(first.name)}].some(row => String(row[${JSON.stringify(firstPrimary.name)}]) === String(id))).toBe(false)\n  })${relation?`\n\n  it('执行 Schema 外键、删除策略与嵌套路由', async () => {\n    const parent = db[${JSON.stringify(relation.parent)}][0], parentId = parent[${JSON.stringify(relation.parentField)}]\n    if (mockApiOptions.validateForeignKeys) {\n      const invalid = await fetch(origin + ${JSON.stringify(`/api/${relation.child}`)}, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ${JSON.stringify(relation.foreignKey)}: '__missing_parent__' }) })\n      expect(invalid.status).toBe(422)\n    }\n    if (mockApiOptions.nestedRoutes) {\n      const nested = await fetch(origin + ${JSON.stringify(nestedBefore)} + parentId + ${JSON.stringify(nestedAfter)})\n      expect(nested.status).toBe(200)\n      const rows = unwrap(await nested.json()) as Record<string, unknown>[]\n      expect(rows.every(row => String(row[${JSON.stringify(relation.foreignKey)}]) === String(parentId))).toBe(true)\n    }\n    const hasChildren = db[${JSON.stringify(relation.child)}].some(row => String(row[${JSON.stringify(relation.foreignKey)}]) === String(parentId))\n    const deleted = await fetch(origin + ${JSON.stringify(`/api/${relation.parent}/`)} + parentId, { method: 'DELETE' })\n    expect(deleted.status).toBe(mockApiOptions.deletePolicy === 'restrict' && hasChildren ? 409 : 200)\n  })`:''}\n})\n`
+}
+
+export function mockApiProjectFiles(project:ProjectSchema):MockApiFile[]{return[
+  {name:'mock-api/package.json',content:JSON.stringify({name:`${packageName(project.name)}-mock-api`,private:true,version:'1.0.0',type:'module',engines:{node:'>=18'},scripts:{typecheck:'tsc --noEmit',test:'vitest run',testWatch:'vitest'},devDependencies:{'@types/node':'22.10.2',msw:'2.7.3',typescript:'5.7.3',vitest:'3.2.7'}},null,2)},
+  {name:'mock-api/tsconfig.json',content:JSON.stringify({compilerOptions:{target:'ES2022',module:'ESNext',moduleResolution:'Bundler',strict:true,lib:['ES2022','DOM','ESNext.Disposable'],types:['node','vitest/globals'],noEmit:true},include:['./*.ts']},null,2)},
+  {name:'mock-api/vitest.config.ts',content:"import { defineConfig } from 'vitest/config'\n\nexport default defineConfig({ test: { environment: 'node', testTimeout: 15_000 } })\n"},
+  {name:'mock-api/handlers.test.ts',content:mockApiSmokeTests(project)},
+  {name:'mock-api/.gitignore',content:'node_modules\ncoverage\n'},
+]}
+
 export function mockApiFiles(project:ProjectSchema,data:GeneratedData,options?:Partial<MockApiOptions>):MockApiFile[]{
   const normalized=normalizeMockApiOptions(options)
   const database=Object.fromEntries(project.tables.map(table=>[table.name,(data[table.id]??[]).map(clean)]))
   return[
+    ...mockApiProjectFiles(project),
     {name:'mock-api/db.json',content:JSON.stringify(database,null,2)},
     {name:'mock-api/config.ts',content:mockApiConfig(project,normalized)},
     {name:'mock-api/handlers.ts',content:mockApiHandlers(project,data,normalized)},

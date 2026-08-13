@@ -2,7 +2,7 @@
 
 面向测试人员的浏览器端测试数据工作台。内置 120+ 字段生成类型和用户、电商、金融、游戏、社区、物流、测试通用七类场景，无需上传任何数据即可生成多表关联测试数据。
 
-当前版本：**4.7.0 关系接口版**。网站没有匿名写入接口，访客的数据与配置仅保存在各自浏览器中。
+当前版本：**4.8.0 可运行工程版**。网站没有匿名写入接口，访客的数据与配置仅保存在各自浏览器中。
 
 ## 功能
 
@@ -148,6 +148,11 @@
 - 每条外键自动生成 `GET /api/父表/:id/子表` 嵌套查询；同一父子表存在多个外键时使用 `by-字段名` 生成无冲突路径
 - 嵌套路由、422/409 响应和删除语义完整写入 OpenAPI、路由清单与 README，使用者无需猜测关系行为
 - 关系策略支持网页开关和 CLI 参数；默认启用外键检查与嵌套路由、默认阻止误删，公开工具不会替用户选择破坏性级联
+- Mock API ZIP 现在是可独立安装的 TypeScript 工程，内置 `package.json`、严格 `tsconfig.json`、Vitest 配置和 `.gitignore`
+- 解压后运行 `npm install && npm run typecheck && npm test` 即可验收，不要求使用者先搭测试脚手架
+- 包内真实 HTTP 测试自动覆盖分页、总数响应头、POST/PATCH/DELETE、数据复位、外键 422、restrict/cascade 和父子嵌套路由
+- MSW 路由使用跨来源匹配，浏览器、本地 Node、Vitest 和不同测试域名访问同一套 `/api/*` 接口都能命中
+- 生成工程依赖采用经过实装验证的精确版本；v4.8 候选包经 npm 官方审计为 0 漏洞
 
 完整版本记录见 [CHANGELOG.md](./CHANGELOG.md)，已实现与待实现功能见 [ROADMAP.md](./ROADMAP.md)。
 
@@ -208,6 +213,15 @@ npm run mock -- --template commerce --format schema --output artifacts/commerce-
 
 ```bash
 npm run mock -- --template commerce --seed 42 --format mock-api --output artifacts/commerce-mock-api.zip
+```
+
+解压导出包后可作为独立工程自检：
+
+```bash
+cd mock-api
+npm install
+npm run typecheck
+npm test
 ```
 
 模拟 120–480 ms 延迟、15% 的 HTTP 429，并使用带分页元信息的响应：

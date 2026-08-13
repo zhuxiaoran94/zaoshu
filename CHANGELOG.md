@@ -1,5 +1,26 @@
 # 更新日志
 
+## 4.8.0 - 可运行工程版
+
+### 解压即可测试
+
+- Mock API ZIP 新增独立 `package.json`、`tsconfig.json`、`vitest.config.ts`、`.gitignore` 和 `handlers.test.ts`，不再要求使用者先创建项目脚手架。
+- 解压后执行 `npm install && npm run typecheck && npm test` 即可完成严格类型检查和真实接口回归。
+- 内置测试通过 MSW Node server 发起真实 Fetch 请求，覆盖列表分页与总数、POST/PATCH/DELETE、主键保护、数据复位、外键 422、删除策略与父子嵌套路由。
+- 生成配置改用显式可编辑运行时类型，测试可以安全临时关闭延迟和失败注入，使用完毕后恢复初始数据与请求序列。
+
+### 可移植性与供应链安全
+
+- 所有接口 handler 改为跨来源路径匹配，解决 Node 测试使用绝对 URL 时相对路由无法命中的问题，同时兼容浏览器和任意本地测试域名。
+- 生成工程声明 Node 18+，锁定 MSW、TypeScript、Vitest 与 Node 类型的精确版本，减少安装时间点导致的依赖漂移。
+- 在真实导出包验收中发现并修复旧 Vitest 版本的 critical 安全通告，最终候选工程经 npm 官方审计为 0 漏洞。
+- MSW JSON 响应边界使用官方 `JsonBodyType` 收窄，生成代码在 TypeScript strict 模式下无错误。
+
+### 验证
+
+- 总测试数增至 119；另在全新临时目录实际生成并解压电商 Mock API，依赖安装、严格类型检查和 3 组 HTTP 集成测试全部通过。
+- 生产构建继续执行 Cloudflare/PWA 产物检查和 450 KiB 首屏预算。
+
 ## 4.7.0 - 关系接口版
 
 ### 真正理解多表关系的 Mock API

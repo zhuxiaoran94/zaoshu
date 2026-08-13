@@ -54,6 +54,8 @@
 - [x] Mock API 网络行为同步进入 UI、CLI、OpenAPI、配置、路由清单和 Manifest
 - [x] Mock API 外键写入校验、restrict/cascade 删除策略和父子嵌套路由
 - [x] 同一父子表多外键的无冲突嵌套路径与生成代码运行级测试
+- [x] Mock API 独立 TypeScript/Vitest 工程、精确依赖、跨来源路由与开箱即跑的 HTTP 回归测试
+- [x] 生成工程严格类型检查与 npm 官方 0 漏洞实装验收
 
 ## 近期版本
 
