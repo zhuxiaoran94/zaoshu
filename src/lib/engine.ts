@@ -124,6 +124,31 @@ export function generateProject(project:ProjectSchema,pools:Record<string,string
   return {data,report:{duration:Math.round(performance.now()-started),totalRows:all.length,normalRows:all.length-abnormal,abnormalRows:abnormal,checks,coverage,generatedAt:new Date().toISOString()}}
 }
 
+export function refreshGeneratedResult(project:ProjectSchema,result:GenerateResult,data:GeneratedData):GenerateResult {
+  const checks=validate(project,data),all=Object.values(data).flat(),abnormal=all.filter(row=>row._mock_meta).length
+  const coverage=result.report.coverage.map(item=>item.label==='约束通过率'?{...item,value:Math.round(checks.filter(check=>check.status==='pass').length/Math.max(1,checks.length)*100),detail:`${checks.filter(check=>check.status==='pass').length}/${checks.length} 项检查通过`}:item)
+  return{data,report:{...result.report,totalRows:all.length,normalRows:all.length-abnormal,abnormalRows:abnormal,checks,coverage}}
+}
+
+export function regenerateDataRow(project:ProjectSchema,data:GeneratedData,tableId:string,rowIndex:number,pools:Record<string,string[]>={},lockedFields:string[]=[],nonce=Date.now()):DataRow {
+  const table=project.tables.find(candidate=>candidate.id===tableId);if(!table)throw new Error('要重新生成的数据表不存在')
+  const original=data[tableId]?.[rowIndex]||{},locked=new Set([...lockedFields,...table.fields.filter(field=>field.primaryKey).map(field=>field.name)]),row:DataRow={}
+  reseed((project.seed+hash(tableId)+rowIndex+nonce)>>>0);const random=seeded((project.seed^hash(tableId)^rowIndex^nonce)>>>0)
+  for(const field of table.fields){
+    if(locked.has(field.name)){if(Object.prototype.hasOwnProperty.call(original,field.name))row[field.name]=original[field.name];continue}
+    if(field.missing&&random()*100<field.missing)continue
+    let value:unknown
+    if(field.ref){const parent=data[field.ref.tableId]||[];value=parent.length?parent[Math.floor(random()*parent.length)][field.ref.field]:null}else value=modeValue(field,rowIndex+nonce%10_000,project.mode,pools)
+    if(field.nullable&&random()*100<field.nullable)value=null
+    if(field.unique){const used=new Set((data[tableId]||[]).filter((_,index)=>index!==rowIndex).map(candidate=>candidate[field.name]));let tries=0;while(used.has(value)&&tries++<100)value=modeValue(field,rowIndex+nonce%10_000+tries+hash(field.id),project.mode,pools)}
+    if(field.prefix&&value!=null)value=field.prefix+value;if(field.suffix&&value!=null)value=String(value)+field.suffix;row[field.name]=value
+  }
+  table.fields.filter(field=>field.formula&&!locked.has(field.name)).forEach(field=>{row[field.name]=resolveFormula(field.formula!,row)})
+  table.fields.filter(field=>field.condition&&!matchesFieldCondition(field,row)&&!locked.has(field.name)).forEach(field=>{if(field.condition!.otherwise==='omit')delete row[field.name];else row[field.name]=null})
+  if(project.mode==='exception'){const candidates=table.fields.filter(field=>!field.primaryKey&&!locked.has(field.name));if(candidates.length)mutate(row,candidates[rowIndex%candidates.length],rowIndex)}
+  return row
+}
+
 export function validate(project:ProjectSchema,data:GeneratedData):QualityCheck[] {
   const checks:QualityCheck[]=[]
   for(const table of project.tables) {

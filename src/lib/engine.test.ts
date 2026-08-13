@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { cloneTemplate } from '../data/templates'
-import { analyzePairwiseCoverage, generatePairwise, generateProject, generateStateEvents, matchesFieldCondition, parsePairwiseRules, sortTables } from './engine'
+import { analyzePairwiseCoverage, generatePairwise, generateProject, generateStateEvents, matchesFieldCondition, parsePairwiseRules, refreshGeneratedResult, regenerateDataRow, sortTables } from './engine'
 import { neutralizeSpreadsheetFormula, toCSV, toSQL } from './exporters'
 import { parseProjectFile, serializeProject } from './projectConfig'
 import type { FieldRule } from '../types'
@@ -104,5 +104,19 @@ describe('Mock造数引擎',()=>{
       expect(events.some(event=>!event.valid&&event.mutation===errorMode)).toBe(true)
       expect(events.every((event,index,array)=>index===0||event.entityId!==array[index-1].entityId||new Date(event.occurredAt)>new Date(array[index-1].occurredAt))).toBe(true)
     }
+  })
+  it('单行重生成保留主键和锁定字段并重新满足外键',()=>{
+    const project=cloneTemplate('commerce');project.tables.forEach(table=>table.count=6);const result=generateProject(project),before=result.data.orders[2]
+    const regenerated=regenerateDataRow(project,result.data,'orders',2,{},['status'],123)
+    expect(regenerated.id).toBe(before.id)
+    expect(regenerated.status).toBe(before.status)
+    expect(new Set(result.data.users.map(row=>row.id)).has(regenerated.userId)).toBe(true)
+    expect(regenerated.orderNo).not.toBe(before.orderNo)
+  })
+  it('编辑结果后重算总量、异常量与质量报告',()=>{
+    const project=cloneTemplate('testing');project.tables.forEach(table=>table.count=3);const result=generateProject(project),data={...result.data,api_requests:result.data.api_requests.slice(1)}
+    const refreshed=refreshGeneratedResult(project,result,data)
+    expect(refreshed.report.totalRows).toBe(result.report.totalRows-1)
+    expect(refreshed.report.checks.find(check=>check.id==='count-api_requests')?.status).toBe('fail')
   })
 })

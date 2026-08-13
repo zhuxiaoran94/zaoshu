@@ -53,4 +53,19 @@ describe('项目建模状态', () => {
     expect(state.panel).toBe('diagnostics')
     expect(state.generationError).toMatch(/阻断问题/)
   })
+
+  it('编辑、删除和单行重生成后会刷新质量报告', () => {
+    const state = useAppStore.getState()
+    state.project.tables.forEach(table => useAppStore.getState().updateTable(table.id, { count: 3 }))
+    useAppStore.getState().generate()
+    const generated = useAppStore.getState().result!
+    expect(generated).toBeTruthy()
+    useAppStore.getState().updateCell(0, 'id', '12345')
+    expect(typeof useAppStore.getState().result!.data.users[0].id).toBe('number')
+    const before = useAppStore.getState().result!.data.users[0].id
+    useAppStore.getState().regenerateRow(0)
+    expect(useAppStore.getState().result!.data.users[0].id).toBe(before)
+    useAppStore.getState().deleteRow(0)
+    expect(useAppStore.getState().result!.report.checks.find(check => check.id === 'count-users')?.status).toBe('fail')
+  })
 })
