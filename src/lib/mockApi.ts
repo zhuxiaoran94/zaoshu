@@ -72,7 +72,7 @@ export function mockApiHandlers(project:ProjectSchema,data:GeneratedData,_option
   const definitions=project.tables.map(table=>{
     const key=primary(table)
     const validation=table.fields.map(field=>{const source=field.values?.length?field.values:ENUM_VALUES[field.generator],values=source?.map(value=>field.dataType==='number'&&Number.isFinite(Number(value))?Number(value):field.dataType==='boolean'&&['true','false'].includes(String(value))?String(value)==='true':value);return{name:field.name,type:field.dataType==='date'?'string':field.dataType,required:field.name!==key.name&&(field.missing??0)===0&&(field.nullable??0)===0&&!field.condition,nullable:Boolean(field.nullable)||field.condition?.otherwise==='null',...(values?.length?{values}:{}),...(field.min!==undefined?{min:field.min}:{}),...(field.max!==undefined?{max:field.max}:{}),...(field.length!==undefined?{maxLength:field.length}:{})}})
-    return`  { resource: ${JSON.stringify(table.name)}, key: ${JSON.stringify(key.name)}, numericKey: ${key.dataType==='number'}, fields: ${JSON.stringify(table.fields.map(field=>field.name))}, validation: ${literal(validation)} },`
+    return`  { resource: ${JSON.stringify(table.name)}, key: ${JSON.stringify(key.name)}, numericKey: ${key.dataType==='number'}, fields: ${JSON.stringify(table.fields.map(field=>field.name))}, uniqueFields: ${JSON.stringify(table.fields.filter(field=>field.unique&&field.name!==key.name).map(field=>field.name))}, validation: ${literal(validation)} },`
   }).join('\n')
   const relationDefinitions=relationSpecs(project).map(relation=>`  { child: ${JSON.stringify(relation.child)}, childField: ${JSON.stringify(relation.foreignKey)}, parent: ${JSON.stringify(relation.parent)}, parentField: ${JSON.stringify(relation.parentField)}, path: ${JSON.stringify(relation.path)} },`).join('\n')
   return `import { http, HttpResponse, type JsonBodyType } from 'msw'
@@ -81,7 +81,7 @@ import { mockApiOptions } from './config'
 type MockRecord = Record<string, unknown>
 type MockDatabase = Record<string, MockRecord[]>
 type FieldValidation = { name: string; type: string; required: boolean; nullable: boolean; values?: unknown[]; min?: number; max?: number; maxLength?: number }
-type ResourceDefinition = { resource: string; key: string; numericKey: boolean; fields: readonly string[]; validation: readonly FieldValidation[] }
+type ResourceDefinition = { resource: string; key: string; numericKey: boolean; fields: readonly string[]; uniqueFields: readonly string[]; validation: readonly FieldValidation[] }
 type ValidationIssue = { field: string; rule: string; message: string }
 export type MockRequestLog = { id: string; sequence: number; method: string; path: string; status: number; latencyMs: number; injectedFailure: boolean; routeOverride?: string }
 export type MockSnapshotSummary = { name: string; revision: number; bytes: number; totalRows: number; rows: Record<string, number> }
@@ -177,6 +177,9 @@ const invalidReference = (body: MockRecord, resource: ResourceDefinition) => {
   }
   return null
 }
+const duplicateUniqueField = (body: MockRecord, resource: ResourceDefinition, exclude?: MockRecord) => resource.uniqueFields.find(field =>
+  body[field] != null && db[resource.resource].some(row => row !== exclude && row[field] != null && sameId(row[field], body[field])),
+)
 type InsertResult = { ok: true; row: MockRecord } | { ok: false; status: number; message: string; details?: MockRecord }
 const insertRecord = (input: MockRecord, resource: ResourceDefinition): InsertResult => {
   const issue = validateBody(input, resource, false)
@@ -190,6 +193,8 @@ const insertRecord = (input: MockRecord, resource: ResourceDefinition): InsertRe
   if (db[resource.resource].some(item => sameId(item[resource.key], body[resource.key]))) {
     return { ok: false, status: 409, message: 'Primary key already exists' }
   }
+  const duplicate = duplicateUniqueField(body, resource)
+  if (duplicate) return { ok: false, status: 409, message: 'Unique field already exists: ' + duplicate, details: { field: duplicate, rule: 'unique' } }
   const invalid = invalidReference(body, resource)
   if (invalid) return { ok: false, status: 422, message: 'Foreign key not found: ' + invalid.childField + ' -> ' + invalid.parent + '.' + invalid.parentField }
   db[resource.resource].push(body)
@@ -355,6 +360,8 @@ export const handlers = resources.flatMap(resource => [
     if (issue) return errorResponse(422, issue.message, issue)
     const body = allowedBody(input, resource)
     const candidate = { ...db[resource.resource][index], ...body }
+    const duplicate = duplicateUniqueField(candidate, resource, db[resource.resource][index])
+    if (duplicate) return errorResponse(409, 'Unique field already exists: ' + duplicate, { field: duplicate, rule: 'unique' })
     const invalid = invalidReference(candidate, resource)
     if (invalid) return errorResponse(422, 'Foreign key not found: ' + invalid.childField + ' -> ' + invalid.parent + '.' + invalid.parentField)
     db[resource.resource][index] = {
@@ -427,6 +434,11 @@ const batchHandlers = resources.flatMap(resource => [
         return errorResponse(422, issue.message, { index, ...issue })
       }
       const body = allowedBody(changes, resource), candidate = { ...db[resource.resource][rowIndex], ...body, [resource.key]: db[resource.resource][rowIndex][resource.key] }
+      const duplicate = duplicateUniqueField(candidate, resource, db[resource.resource][rowIndex])
+      if (duplicate) {
+        db[resource.resource] = snapshot
+        return errorResponse(409, 'Unique field already exists: ' + duplicate, { index, field: duplicate, rule: 'unique' })
+      }
       const invalid = invalidReference(candidate, resource)
       if (invalid) {
         db[resource.resource] = snapshot
@@ -573,6 +585,8 @@ const controlHandlers = [
           const issue = validateBody(changes, resource, true)
           if (issue) return rollback(422, issue.message, index, issue)
           const candidate = { ...db[resource.resource][rowIndex], ...allowedBody(changes, resource), [resource.key]: db[resource.resource][rowIndex][resource.key] }
+          const duplicate = duplicateUniqueField(candidate, resource, db[resource.resource][rowIndex])
+          if (duplicate) return rollback(409, 'Unique field already exists: ' + duplicate, index, { field: duplicate, rule: 'unique' })
           const invalid = invalidReference(candidate, resource)
           if (invalid) return rollback(422, 'Foreign key not found: ' + invalid.childField + ' -> ' + invalid.parent + '.' + invalid.parentField, index)
           db[resource.resource][rowIndex] = candidate
@@ -679,7 +693,7 @@ ${routes.map(route=>`- \`GET ${route.list}?_page=1&_limit=20&_sort=${route.prima
 
 ${nested.length?`### 父子嵌套查询\n\n${nested.map(route=>`- \`GET ${route.path}\`（${route.parent} → ${route.child}.${route.foreignKey}）`).join('\n')}\n`:''}
 
-列表响应包含 \`X-Total-Count\`，业务响应包含稳定请求编号 \`X-Mock-Request-Id\` 和实际等待毫秒数 \`X-Mock-Latency\`，注入失败额外包含 \`X-Mock-Injected-Failure: true\`；单页最多 1,000 条。POST 自动补充缺失主键并拒绝重复主键。严格 Schema 校验关闭时，未知字段被兼容性丢弃；开启后，未知字段、类型、必填、空值、枚举、范围、长度和 PATCH 主键修改均返回 422，并附带 \`field\` 与 \`rule\`。开启外键校验时，POST/PATCH 的悬空外键返回 422。批量新增接受 JSON 数组或 \`{ items: [] }\`，批量修改接受 \`[{ id, changes }]\`，批量删除接受 ID 数组或 \`{ ids: [] }\`；单批最多 1,000 条。任一条格式、Schema、主键、外键或引用策略失败都会整批不落库，并在错误中返回从 0 开始的 \`index\`。级联批量删除会在 \`meta.cascaded\` 返回额外清理的后代数量。
+列表响应包含 \`X-Total-Count\`，业务响应包含稳定请求编号 \`X-Mock-Request-Id\` 和实际等待毫秒数 \`X-Mock-Latency\`，注入失败额外包含 \`X-Mock-Injected-Failure: true\`；单页最多 1,000 条。POST 自动补充缺失主键，主键或 Schema 中标记为 unique 的字段重复时返回 409 与 \`field/rule=unique\`。严格 Schema 校验关闭时，未知字段被兼容性丢弃；开启后，未知字段、类型、必填、空值、枚举、范围、长度和 PATCH 主键修改均返回 422，并附带 \`field\` 与 \`rule\`。开启外键校验时，POST/PATCH 的悬空外键返回 422。批量新增接受 JSON 数组或 \`{ items: [] }\`，批量修改接受 \`[{ id, changes }]\`，批量删除接受 ID 数组或 \`{ ids: [] }\`；单批最多 1,000 条。任一条格式、Schema、唯一、主键、外键或引用策略失败都会整批不落库，并在错误中返回从 0 开始的 \`index\`。级联批量删除会在 \`meta.cascaded\` 返回额外清理的后代数量。
 
 ## 文件
 
@@ -696,6 +710,7 @@ ${nested.length?`### 父子嵌套查询\n\n${nested.map(route=>`- \`GET ${route.
 
 export function mockApiSmokeTests(project:ProjectSchema){
   const first=project.tables[0],firstPrimary=primary(first),firstMutable=first.fields.find(field=>field.name!==firstPrimary.name)??firstPrimary,relations=relationSpecs(project),relation=relations[0]
+  const firstUniqueFields=first.fields.filter(field=>field.unique&&field.name!==firstPrimary.name).map(field=>field.name)
   const relationParent=relation?project.tables.find(table=>table.name===relation.parent):undefined,relationChild=relation?project.tables.find(table=>table.name===relation.child):undefined
   const [nestedBefore,nestedAfter]=relation?.path.split(':id')??['','']
   return `import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
@@ -734,6 +749,7 @@ describe(${JSON.stringify(project.name+' Mock API')}, () => {
     mockApiOptions.validateSchema = true
     const original = db[${JSON.stringify(first.name)}][0], valid = { ...original }
     delete valid[${JSON.stringify(firstPrimary.name)}]
+    for (const field of ${JSON.stringify(firstUniqueFields)}) valid[field] = typeof valid[field] === 'number' ? Number(valid[field]) + 1_000_000_000 : typeof valid[field] === 'boolean' ? !valid[field] : String(valid[field]) + '-strict'
     const created = await fetch(origin + ${JSON.stringify(`/api/${first.name}`)}, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(valid) })
     expect(created.status).toBe(201)
     const invalid = await fetch(origin + ${JSON.stringify(`/api/${first.name}`)}, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...valid, __unexpected: true }) })
@@ -743,6 +759,20 @@ describe(${JSON.stringify(project.name+' Mock API')}, () => {
     const immutable = await fetch(origin + ${JSON.stringify(`/api/${first.name}/`)} + id, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ${JSON.stringify(firstPrimary.name)}: id }) })
     expect(immutable.status).toBe(422)
     expect((await immutable.json() as { error: { rule: string } }).error.rule).toBe('immutable')
+  })
+
+  it('所有写入口拒绝唯一字段冲突', async () => {
+    const existing = db[${JSON.stringify(first.name)}][0]
+    const uniqueField = ${JSON.stringify(first.fields.find(field=>field.unique&&field.name!==firstPrimary.name)?.name??'')}
+    if (!uniqueField) return
+    const duplicate = { ...existing }; delete duplicate[${JSON.stringify(firstPrimary.name)}]
+    const created = await fetch(origin + ${JSON.stringify(`/api/${first.name}`)}, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(duplicate) })
+    expect(created.status).toBe(409)
+    expect((await created.json() as { error: { field: string; rule: string } }).error).toMatchObject({ field: uniqueField, rule: 'unique' })
+    const second = db[${JSON.stringify(first.name)}][1]
+    const patched = await fetch(origin + ${JSON.stringify(`/api/${first.name}/`)} + second[${JSON.stringify(firstPrimary.name)}], { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ [uniqueField]: existing[uniqueField] }) })
+    expect(patched.status).toBe(409)
+    expect((await patched.json() as { error: { field: string; rule: string } }).error).toMatchObject({ field: uniqueField, rule: 'unique' })
   })
 
   it('记录可筛选的脱敏请求轨迹并支持单独清空', async () => {
