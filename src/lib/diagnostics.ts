@@ -2,6 +2,7 @@ import type { ProjectSchema } from '../types'
 import { sortTables } from './modeling'
 import { ENUM_SIZES } from '../data/generatorCatalog'
 import { orderFormulaFields, validateFormula } from './formula'
+import { plannedProjectCounts, plannedProjectTotal } from './cardinality'
 
 export interface DiagnosticIssue {
   id: string
@@ -25,11 +26,14 @@ export function diagnoseProject(project: ProjectSchema): DiagnosticIssue[] {
   const issues: DiagnosticIssue[] = []
   const tableIds = new Set(project.tables.map(table => table.id))
   const tableNames = new Map<string, number>()
-  const totalRows = project.tables.reduce((sum, table) => sum + table.count, 0)
+  const plannedCounts = plannedProjectCounts(project),totalRows = plannedProjectTotal(project),maximumRows=plannedProjectTotal(project,true)
   if (totalRows > 200_000) issues.push({ id: 'project-total', level: 'error', title: '项目数据量过大', detail: `当前计划生成 ${totalRows.toLocaleString()} 条，公开版上限为 200,000 条。`, suggestion: '减少单表生成数量，或拆成多个项目分批生成。' })
   if (totalRows > 100_000) issues.push({ id: 'project-large', level: 'warning', title: '本次生成量较大', detail: `将生成 ${totalRows.toLocaleString()} 条数据，可能占用较多浏览器内存。`, suggestion: '优先按表分批导出，并关闭其他占用内存的页面。' })
+  if(maximumRows>200_000&&totalRows<=200_000)issues.push({id:'project-cardinality-maximum',level:'warning',title:'一对多上限较大',detail:`预计 ${totalRows.toLocaleString()} 条，最大可达 ${maximumRows.toLocaleString()} 条。`,suggestion:'降低每个父记录的最多条数。'})
 
   project.tables.forEach(table => {
+    const plannedCount=plannedCounts[table.id]??table.count
+    if(plannedCount>100_000)issues.push({id:`table-total-${table.id}`,level:'error',title:'单表数据量过大',detail:`${table.label} 预计 ${plannedCount.toLocaleString()} 条，上限 100,000 条。`,tableId:table.id,suggestion:'降低父表数量或子记录范围。'})
     tableNames.set(table.name, (tableNames.get(table.name) || 0) + 1)
     const fieldNames = new Map<string, number>()
     table.fields.forEach(field => fieldNames.set(field.name, (fieldNames.get(field.name) || 0) + 1))
@@ -42,14 +46,14 @@ export function diagnoseProject(project: ProjectSchema): DiagnosticIssue[] {
         const target = project.tables.find(candidate => candidate.id === field.ref!.tableId)
         if (!target) issues.push({ id: `ref-table-${field.id}`, level: 'error', title: '引用的数据表不存在', detail: `${table.label}.${field.label} 引用了已删除的数据表。`, tableId: table.id, fieldId: field.id, suggestion: '清除该引用，或重新选择目标数据表和字段。' })
         else if (!target.fields.some(candidate => candidate.name === field.ref!.field)) issues.push({ id: `ref-field-${field.id}`, level: 'error', title: '引用的字段不存在', detail: `${table.label}.${field.label} 引用了 ${target.label}.${field.ref.field}，但目标字段不存在。`, tableId: table.id, fieldId: field.id, suggestion: '重新选择目标表中的主键或唯一字段。' })
-        else if ((field.ref.strategy === 'oneToOne' || field.unique || field.primaryKey) && table.count > target.count) issues.push({ id: `ref-capacity-${field.id}`, level: 'error', title: '唯一引用容量不足', detail: `${table.label}.${field.label} 需要 ${table.count} 个唯一引用，但 ${target.label} 只有 ${target.count} 条。`, tableId: table.id, fieldId: field.id, suggestion: `将当前表数量减少到 ${target.count} 条以内，增加父表数量，或关闭唯一引用。` })
+        else if ((field.ref.strategy === 'oneToOne' || field.unique || field.primaryKey) && plannedCount > (plannedCounts[target.id]??target.count)) issues.push({ id: `ref-capacity-${field.id}`, level: 'error', title: '唯一引用容量不足', detail: `${table.label}.${field.label} 需要 ${plannedCount} 个唯一引用，但 ${target.label} 只有 ${plannedCounts[target.id]??target.count} 条。`, tableId: table.id, fieldId: field.id, suggestion: `减少当前表数量或一对多基数，增加父表数量，或关闭唯一引用。` })
         if (field.ref.strategy === 'oneToOne' && ((field.nullable ?? 0) > 0 || (field.missing ?? 0) > 0)) issues.push({ id: `ref-one-null-${field.id}`, level: 'error', title: '一对一引用不能随机留空', detail: `${table.label}.${field.label} 配置了严格一对一，同时设置了空值率或缺失率。`, tableId: table.id, fieldId: field.id, suggestion: '将空值率和缺失率设为 0，或改用非严格分配策略。' })
         if (field.ref.strategy === 'oneToOne' && field.condition) issues.push({ id: `ref-one-condition-${field.id}`, level: 'error', title: '一对一引用不能使用条件生成', detail: `${table.label}.${field.label} 的条件规则可能把唯一引用置空或移除。`, tableId: table.id, fieldId: field.id, suggestion: '移除条件规则，或改用非严格分配策略。' })
         if (field.prefix || field.suffix || field.formula) issues.push({ id: `ref-transform-${field.id}`, level: 'error', title: '外键不能再做值变换', detail: `${table.label}.${field.label} 同时配置了外键与前后缀或计算公式，生成值将不再匹配父表。`, tableId: table.id, fieldId: field.id, suggestion: '保留外键引用，清除该字段的前缀、后缀和计算公式。' })
       }
       if (field.unique && !SEQUENCE_GENERATORS.has(field.generator)) {
         const capacity = field.values?.length || LIMITED_ENUMS[field.generator]
-        if (capacity !== undefined && table.count > capacity) issues.push({ id: `unique-${field.id}`, level: 'error', title: '唯一值空间不足', detail: `${table.label}.${field.label} 只有 ${capacity} 个候选值，却需要生成 ${table.count} 条唯一数据。`, tableId: table.id, fieldId: field.id, suggestion: '关闭唯一约束、增加候选值，或减少生成数量。' })
+        if (capacity !== undefined && plannedCount > capacity) issues.push({ id: `unique-${field.id}`, level: 'error', title: '唯一值空间不足', detail: `${table.label}.${field.label} 只有 ${capacity} 个候选值，却需要生成 ${plannedCount} 条唯一数据。`, tableId: table.id, fieldId: field.id, suggestion: '关闭唯一约束、增加候选值，或减少生成数量。' })
       }
       if (field.formula) {try{const{missing}=validateFormula(field.formula,table.fields.filter(candidate=>candidate.id!==field.id).map(candidate=>candidate.name));if(missing.length)issues.push({ id: `formula-${field.id}`, level: 'error', title: '公式引用不存在字段', detail: `${table.label}.${field.label} 的公式引用了 ${[...new Set(missing)].join('、')}。`, tableId: table.id, fieldId: field.id, suggestion: '修正公式字段名，或先创建被引用字段。' })}catch(error){issues.push({id:`formula-syntax-${field.id}`,level:'error',title:'计算公式语法错误',detail:`${table.label}.${field.label}：${error instanceof Error?error.message:'无法解析公式'}`,tableId:table.id,fieldId:field.id,suggestion:'使用白名单运算符和函数，检查括号、引号及参数。'})}}
       if ((field.nullable || 0) + (field.missing || 0) > 100) issues.push({ id: `empty-rate-${field.id}`, level: 'warning', title: '空值比例可能超出预期', detail: `${table.label}.${field.label} 的空值率与缺失率之和超过 100%。`, tableId: table.id, fieldId: field.id, suggestion: '降低空值率或字段缺失率。' })
@@ -61,6 +65,7 @@ export function diagnoseProject(project: ProjectSchema): DiagnosticIssue[] {
         if (!['empty', 'notEmpty'].includes(rule.operator) && !rule.value?.trim()) issues.push({ id: `condition-value-${field.id}-${index}`, level: 'warning', title: '条件比较值为空', detail: `${table.label}.${field.label} 的第 ${index + 1} 条条件没有比较值。`, tableId: table.id, fieldId: field.id, suggestion: '填写比较值；判断空值请改用“为空”或“不为空”。' })
       })
     })
+    if(table.countByReference){const config=table.countByReference,driver=table.fields.find(field=>field.id===config.fieldId);if(!driver?.ref)issues.push({id:`cardinality-field-${table.id}`,level:'error',title:'一对多驱动字段无效',detail:`${table.label} 的驱动字段不是外键。`,tableId:table.id,suggestion:'重新选择外键或改回固定条数。'});else{if(config.min>config.max)issues.push({id:`cardinality-range-${table.id}`,level:'error',title:'一对多数量范围无效',detail:`${table.label} 最少 ${config.min} 条大于最多 ${config.max} 条。`,tableId:table.id,fieldId:driver.id,suggestion:'调小最少条数。'});if(config.max>1&&(driver.unique||driver.primaryKey||driver.ref.strategy==='oneToOne'))issues.push({id:`cardinality-unique-${table.id}`,level:'error',title:'一对多与唯一引用冲突',detail:`${table.label}.${driver.label} 最多 ${config.max} 条，不能要求引用唯一。`,tableId:table.id,fieldId:driver.id,suggestion:'关闭唯一约束，或将最多条数设为 1。'});if((driver.nullable??0)>0||(driver.missing??0)>0||driver.condition)issues.push({id:`cardinality-empty-${table.id}`,level:'error',title:'驱动外键不能留空',detail:`${table.label}.${driver.label} 不能配置空值、缺失或条件。`,tableId:table.id,fieldId:driver.id,suggestion:'清除空值、缺失和条件规则。'})}}
     try{orderFormulaFields(table.fields)}catch(error){issues.push({id:`formula-cycle-${table.id}`,level:'error',title:'计算字段循环依赖',detail:`${table.label}：${error instanceof Error?error.message:'计算字段无法排序'}`,tableId:table.id,suggestion:'移除其中一条计算字段引用，使依赖形成单向链。'})}
   })
   tableNames.forEach((count, name) => {

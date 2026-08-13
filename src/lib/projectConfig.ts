@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { ProjectSchema } from '../types'
+import { plannedProjectTotal } from './cardinality'
 
 const MAX_TABLES = 50
 const MAX_FIELDS_PER_TABLE = 200
@@ -56,6 +57,11 @@ const tableSchema = z.object({
   name: z.string().min(1).max(80).regex(/^[A-Za-z_][A-Za-z0-9_]*$/, '表名只能使用字母、数字和下划线'),
   label: z.string().min(1).max(80),
   count: z.number().int().min(1).max(100_000),
+  countByReference: z.object({
+    fieldId: z.string().min(1).max(100),
+    min: z.number().int().min(0).max(1_000),
+    max: z.number().int().min(0).max(1_000),
+  }).optional(),
   fields: z.array(fieldSchema).min(1).max(MAX_FIELDS_PER_TABLE),
 })
 
@@ -69,13 +75,18 @@ const projectSchema = z.object({
   version: z.string().min(1).max(20),
   tables: z.array(tableSchema).min(1).max(MAX_TABLES),
 }).superRefine((project, context) => {
-  const totalRows = project.tables.reduce((sum, table) => sum + table.count, 0)
+  const totalRows = plannedProjectTotal(project)
   if (totalRows > MAX_TOTAL_ROWS) context.addIssue({ code: z.ZodIssueCode.custom, message: `总生成量不能超过 ${MAX_TOTAL_ROWS.toLocaleString()} 条`, path: ['tables'] })
   const tableIds = new Set(project.tables.map(table => table.id))
   if (tableIds.size !== project.tables.length) context.addIssue({ code: z.ZodIssueCode.custom, message: '数据表 ID 不能重复', path: ['tables'] })
   project.tables.forEach((table, tableIndex) => {
     const names = new Set(table.fields.map(field => field.name))
     if (names.size !== table.fields.length) context.addIssue({ code: z.ZodIssueCode.custom, message: '同一数据表中的字段名不能重复', path: ['tables', tableIndex, 'fields'] })
+    if (table.countByReference) {
+      const countField = table.fields.find(field => field.id === table.countByReference!.fieldId)
+      if (!countField?.ref) context.addIssue({ code: z.ZodIssueCode.custom, message: '按父记录生成必须选择当前表中的外键字段', path: ['tables', tableIndex, 'countByReference', 'fieldId'] })
+      if (table.countByReference.min > table.countByReference.max) context.addIssue({ code: z.ZodIssueCode.custom, message: '每个父记录最少条数不能大于最多条数', path: ['tables', tableIndex, 'countByReference'] })
+    }
     table.fields.forEach((field, fieldIndex) => {
       if (field.ref && !tableIds.has(field.ref.tableId)) context.addIssue({ code: z.ZodIssueCode.custom, message: `引用的数据表 ${field.ref.tableId} 不存在`, path: ['tables', tableIndex, 'fields', fieldIndex, 'ref'] })
       if (field.min !== undefined && field.max !== undefined && field.min > field.max) context.addIssue({ code: z.ZodIssueCode.custom, message: '最小值不能大于最大值', path: ['tables', tableIndex, 'fields', fieldIndex] })

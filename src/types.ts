@@ -60,6 +60,11 @@ export interface TableSchema {
   name: string
   label: string
   count: number
+  countByReference?: {
+    fieldId: string
+    min: number
+    max: number
+  }
   fields: FieldRule[]
 }
 

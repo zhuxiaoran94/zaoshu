@@ -2,6 +2,7 @@ import type { GenerateResult, GeneratedData, ProjectSchema, QualityCheck, TableS
 import { analyzeCoverage, coveragePercentage } from './coverage'
 import { ENUM_VALUES } from '../data/enumValues'
 import { analyzeReferenceDistribution, referenceStrategy } from './reference'
+import { plannedProjectCounts } from './cardinality'
 
 const issueRows=(indexes:number[])=>({rowIndexes:indexes.slice(0,200),issueCount:indexes.length})
 const expectedStatus=(project:ProjectSchema,invalid:number):QualityCheck['status']=>invalid===0?'pass':project.mode==='boundary'||project.mode==='exception'?'expected':'fail'
@@ -23,10 +24,11 @@ export function sortTables(tables:TableSchema[]) {
 }
 
 export function validate(project:ProjectSchema,data:GeneratedData):QualityCheck[] {
-  const checks:QualityCheck[]=[]
+  const checks:QualityCheck[]=[],plannedCounts=plannedProjectCounts(project)
   for(const table of project.tables) {
     const rows=data[table.id]||[]
-    checks.push({id:`count-${table.id}`,label:`${table.label} 数据量`,status:rows.length===table.count?'pass':'fail',detail:`期望 ${table.count} 条，实际 ${rows.length} 条`,tableId:table.id})
+    const expectedCount=plannedCounts[table.id]??table.count;checks.push({id:`count-${table.id}`,label:`${table.label} 数据量`,status:rows.length===expectedCount?'pass':'fail',detail:`期望 ${expectedCount} 条${table.countByReference?'（按父记录基数）':''}，实际 ${rows.length} 条`,tableId:table.id})
+    if(table.countByReference){const config=table.countByReference,driver=table.fields.find(field=>field.id===config.fieldId),parentRows=driver?.ref?data[driver.ref.tableId]||[]:[],parentKeys=parentRows.map(row=>row[driver!.ref!.field]),usage=new Map(parentKeys.map(value=>[enumKey(value,driver!.dataType),0]));rows.forEach(row=>{const key=enumKey(row[driver?.name??''],driver?.dataType??'string');if(usage.has(key))usage.set(key,usage.get(key)!+1)});const invalidParents=[...usage.entries()].filter(([,count])=>count<config.min||count>config.max),invalidKeys=new Set(invalidParents.map(([key])=>key)),invalidRows=rows.map((row,index)=>({row,index})).filter(({row})=>invalidKeys.has(enumKey(row[driver?.name??''],driver?.dataType??'string'))).map(item=>item.index);checks.push({id:`cardinality-${table.id}`,label:`${table.label} 一对多基数`,status:expectedStatus(project,invalidParents.length),detail:invalidParents.length?`${invalidParents.length} 个父记录超出 ${config.min}–${config.max} 条`:`${parentRows.length} 个父记录均符合 ${config.min}–${config.max} 条`,tableId:table.id,fieldId:driver?.id,...issueRows(invalidRows.length?invalidRows:Array.from({length:invalidParents.length},(_,index)=>index))})}
     for(const field of table.fields) {
       const values=rows.map(r=>r[field.name]).filter(v=>v!==undefined&&v!==null)
       const required=field.condition?[]:rows.map((row,index)=>({row,index})).filter(({row})=>(field.missing??0)===0&&!Object.prototype.hasOwnProperty.call(row,field.name)||(field.nullable??0)===0&&row[field.name]===null).map(item=>item.index);checks.push({id:`required-${field.id}`,label:`${table.label}.${field.label} 必填`,status:expectedStatus(project,required.length),detail:field.condition?'由条件规则控制是否必填':required.length?`${required.length} 条记录缺失或为 NULL`:'必填记录均有值',tableId:table.id,fieldId:field.id,...issueRows(required)})

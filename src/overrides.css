@@ -264,6 +264,15 @@
 .reference-strategy-note { margin-top: 2px; padding: 9px; border-radius: 7px; background: #edf6f5; color: var(--muted); }
 .reference-strategy-note > strong { display: block; font-size: 9px; line-height: 1.55; }
 .reference-strategy-note > label { margin-top: 8px; }
+.cardinality-toolbar { display: flex; min-height: 40px; flex: none; align-items: center; gap: 10px; padding: 5px 14px; border-bottom: 1px solid var(--line); background: #e8f2f3; }
+.cardinality-toolbar label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 9px; }
+.cardinality-toolbar label:first-child span { color: var(--ink); font-weight: 700; }
+.cardinality-toolbar input[type=checkbox] { accent-color: var(--teal); }
+.cardinality-toolbar input[type=number] { width: 52px; border: 1px solid #bfcfd6; border-radius: 5px; padding: 5px; font: 9px ui-monospace, monospace; }
+.cardinality-toolbar select { max-width: 150px; border: 1px solid #bfcfd6; border-radius: 5px; padding: 5px; background: white; font-size: 9px; }
+.cardinality-toolbar i { color: var(--muted); font-style: normal; }
+.cardinality-toolbar b { font-weight: 500; }
+.cardinality-toolbar em { margin-left: auto; color: var(--blue); font-size: 9px; font-style: normal; font-weight: 700; }
 
 .relation-lines article div {
   display: flex;
@@ -285,6 +294,8 @@
   }
 
   .relation-lines article > aside { grid-template-columns: 1fr 1fr; }
+  .cardinality-toolbar { flex-wrap: wrap; padding: 8px 14px; }
+  .cardinality-toolbar em { width: 100%; margin-left: 0; }
 }
 
 .coverage-head { display: flex !important; justify-content: space-between; align-items: center !important; }

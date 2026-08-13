@@ -17,6 +17,14 @@ export const TEMPLATES: ProjectSchema[] = [
   project('testing','测试通用','接口、日志、设备与批量任务数据',[t('api_requests','api_requests','接口请求',50,[f('id','请求 ID','traceId','string',{primaryKey:true}),f('method','方法','httpMethod'),f('path','路径','path'),f('status','状态码','httpStatus','number'),f('duration','耗时(ms)','positiveInt','number',{min:5,max:3000}),f('userAgent','User-Agent','userAgent'),f('createdAt','请求时间','dateTime','date')]),t('files','files','文件数据',20,[f('id','文件 ID','uuid','string',{primaryKey:true}),f('name','文件名','fileName'),f('type','类型','mimeType'),f('size','大小','fileSize','number'),f('url','地址','url')]),t('devices','devices','设备数据',20,[f('id','设备 ID','uuid','string',{primaryKey:true}),f('model','型号','device'),f('os','系统','os'),f('browser','浏览器','browser'),f('ip','IP','ipv4')]),t('batch_jobs','batch_jobs','批量任务',30,[f('id','任务 ID','uuid','string',{primaryKey:true}),f('name','任务名','chineseSentence'),f('status','状态','batchStatus'),f('progress','进度','percentage','number'),f('createdAt','创建时间','dateTime','date')])]),
 ]
 
+const commerceTemplate=TEMPLATES.find(template=>template.templateId==='commerce')
+if(commerceTemplate){
+  const orders=commerceTemplate.tables.find(table=>table.id==='orders'),items=commerceTemplate.tables.find(table=>table.id==='order_items')
+  const orderUser=orders?.fields.find(field=>field.name==='userId'),itemOrder=items?.fields.find(field=>field.name==='orderId')
+  if(orders&&orderUser)orders.countByReference={fieldId:orderUser.id,min:1,max:3}
+  if(items&&itemOrder)items.countByReference={fieldId:itemOrder.id,min:2,max:4}
+}
+
 export function cloneTemplate(templateId:string):ProjectSchema {
   const source = TEMPLATES.find(x=>x.templateId===templateId) ?? TEMPLATES[0]
   return structuredClone({...source,id:`project_${Date.now()}`})

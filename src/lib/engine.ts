@@ -4,6 +4,7 @@ import { sortTables, validate } from './modeling'
 import { analyzeCoverage, coveragePercentage } from './coverage'
 import { evaluateFormula, orderFormulaFields } from './formula'
 import { selectReferenceValue } from './reference'
+import { planTableCardinality } from './cardinality'
 export { refreshGeneratedResult, sortTables, validate } from './modeling'
 
 function hash(value:string) { let h=2166136261; for(const c of value) { h ^= c.charCodeAt(0); h=Math.imul(h,16777619) } return h>>>0 }
@@ -65,19 +66,20 @@ function modeValue(field:FieldRule,rowIndex:number,mode:DataMode,pools:Record<st
 export function generateProject(project:ProjectSchema,pools:Record<string,string[]>={}):GenerateResult {
   const started=performance.now(); reseed(project.seed); const random=seeded(project.seed); const data:GeneratedData={}; const sorted=sortTables(project.tables)
   for(const table of sorted) {
+    const cardinality=planTableCardinality(table,data,project.seed),rowCount=cardinality.count
     const rows:DataRow[]=[]; const uniqueMap=new Map<string,Set<unknown>>()
-    for(let i=0;i<table.count;i++) {
+    for(let i=0;i<rowCount;i++) {
       const row:DataRow={}
       for(const field of table.fields) {
         if(field.missing && random()*100<field.missing) continue
         let value:unknown;const referenceParents=field.ref?data[field.ref.tableId]||[]:[]
         if(field.ref) {
-          value=selectReferenceValue(field.ref,i,referenceParents,random)
-        } else value=modeValue(field,i,project.mode,pools,table.count)
+          value=field.id===cardinality.referenceFieldId?referenceParents[cardinality.parentRowIndexes[i]]?.[field.ref.field]??null:selectReferenceValue(field.ref,i,referenceParents,random)
+        } else value=modeValue(field,i,project.mode,pools,rowCount)
         if(field.nullable && random()*100<field.nullable) value=null
         if(field.unique) {
           const used=uniqueMap.get(field.name)??new Set(); let tries=0
-          while(used.has(value)&&tries++<Math.max(50,referenceParents.length*2)) value=field.ref?selectReferenceValue(field.ref,i+tries+hash(field.id),referenceParents,random):modeValue(field,i+tries+hash(field.id),project.mode,pools,table.count)
+          while(used.has(value)&&tries++<Math.max(50,referenceParents.length*2)) value=field.ref?selectReferenceValue(field.ref,i+tries+hash(field.id),referenceParents,random):modeValue(field,i+tries+hash(field.id),project.mode,pools,rowCount)
           used.add(value); uniqueMap.set(field.name,used)
         }
         if(field.prefix&&value!=null) value=field.prefix+value
@@ -112,6 +114,7 @@ export function generateProject(project:ProjectSchema,pools:Record<string,string
 
 export function supplementCoverageGaps(project:ProjectSchema,data:GeneratedData,pools:Record<string,string[]>={},selectedGaps?:CoverageGap[]){
   const gaps=selectedGaps??analyzeCoverage(project,data).gaps,nextData:GeneratedData=structuredClone(data),addedByTable:Record<string,number>={}
+  const drivenTable=project.tables.find(table=>table.countByReference&&gaps.some(gap=>gap.tableId===table.id));if(drivenTable)throw new Error(`${drivenTable.label} 使用按父记录生成，不能单独追加覆盖行；请调整字段规则后重新生成`)
   for(const table of sortTables(project.tables)){
     const tableGaps=gaps.filter(gap=>gap.tableId===table.id),fieldOffsets=new Map<string,number>(),scheduled=tableGaps.map(gap=>{const start=fieldOffsets.get(gap.fieldId)??0;fieldOffsets.set(gap.fieldId,start+gap.missingValues.length);return{gap,start}}),needed=Math.max(0,...fieldOffsets.values());if(!needed)continue
     const rows=nextData[table.id]||[],uniqueMap=new Map(table.fields.filter(field=>field.unique||field.primaryKey).map(field=>[field.name,new Set(rows.map(row=>row[field.name]))]))

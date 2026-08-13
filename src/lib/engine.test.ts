@@ -23,7 +23,7 @@ describe('Mock造数引擎',()=>{
     expect(data.order_items.every(r=>orderIds.has(r.orderId))).toBe(true)
   })
   it('外键支持均匀、热点和严格一对一策略并保持可复现',()=>{
-    const project=cloneTemplate('commerce'),users=project.tables.find(table=>table.id==='users')!,orders=project.tables.find(table=>table.id==='orders')!,userId=orders.fields.find(field=>field.name==='userId')!
+    const project=cloneTemplate('commerce'),users=project.tables.find(table=>table.id==='users')!,orders=project.tables.find(table=>table.id==='orders')!,userId=orders.fields.find(field=>field.name==='userId')!;orders.countByReference=undefined
     users.count=5;orders.count=12;project.tables.filter(table=>!['users','orders'].includes(table.id)).forEach(table=>table.count=1)
     userId.ref={tableId:'users',field:'id',strategy:'roundRobin'}
     let first=generateProject(project).data,counts=users.count?first.users.map(parent=>first.orders.filter(row=>row.userId===parent.id).length):[]
@@ -35,7 +35,7 @@ describe('Mock造数引擎',()=>{
   })
   it('覆盖补数不会撑破严格一对一的父表容量',()=>{
     const project=cloneTemplate('commerce'),users=project.tables.find(table=>table.id==='users')!,orders=project.tables.find(table=>table.id==='orders')!,field=orders.fields.find(candidate=>candidate.name==='userId')!
-    users.count=2;orders.count=2;field.ref={tableId:'users',field:'id',strategy:'oneToOne'};field.unique=true
+    users.count=2;orders.count=2;orders.countByReference=undefined;field.ref={tableId:'users',field:'id',strategy:'oneToOne'};field.unique=true
     const result=generateProject(project),gap={id:'g',kind:'boundary' as const,tableId:'orders',fieldId:orders.fields.find(candidate=>candidate.name==='amount')!.id,label:'金额边界',detail:'补齐',missingValues:[0]}
     expect(()=>supplementCoverageGaps(project,result.data,{},[gap])).toThrow(/唯一引用容量不足/)
   })
