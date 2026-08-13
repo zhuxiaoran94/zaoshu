@@ -2,7 +2,7 @@
 
 面向测试人员的浏览器端测试数据工作台。内置 120+ 字段生成类型和用户、电商、金融、游戏、社区、物流、测试通用七类场景，无需上传任何数据即可生成多表关联测试数据。
 
-当前版本：**4.9.0 批量联调版**。网站没有匿名写入接口，访客的数据与配置仅保存在各自浏览器中。
+当前版本：**5.0.0 路由场景版**。网站没有匿名写入接口，访客的数据与配置仅保存在各自浏览器中。
 
 ## 功能
 
@@ -156,6 +156,10 @@
 - 每张表提供原子批量创建接口，单次支持 1–1,000 条；任一项格式、主键或外键失败都会整批回滚，并返回失败项下标
 - Mock API 新增不受延迟/故障注入影响的健康检查和整库复位接口，100% 失败场景下仍能确认数据状态并恢复测试基线
 - 批量与控制接口完整进入 `routes.json`、OpenAPI、包内 README 和真实 HTTP 回归测试，不存在只有代码没有契约的隐藏能力
+- 导出面板可为最多 20 个具体接口单独覆盖延迟、失败率、HTTP 状态码和错误消息，未配置接口继续使用全局网络场景
+- 单路由规则只能从当前 Schema 的真实列表、单条、批量和父子路由中选择；路径、方法、数值和消息统一经过白名单归一化
+- 命中覆盖规则的响应带 `X-Mock-Route-Override`，OpenAPI 操作带 `x-mock-route-override`，方便联调和回归断言规则确实生效
+- CLI 支持重复使用 `--mock-api-route 'METHOD|path|min:max|rate|status|message'`，并在生成前拒绝当前 Schema 中不存在的路由
 
 完整版本记录见 [CHANGELOG.md](./CHANGELOG.md)，已实现与待实现功能见 [ROADMAP.md](./ROADMAP.md)。
 
@@ -248,7 +252,17 @@ npm run mock -- --template commerce --format mock-api \
 
 默认使用 `restrict`；也可用 `--mock-api-no-fk-check` 或 `--mock-api-no-nested` 关闭对应能力。
 
-解压后安装 `msw`，浏览器入口调用 `startMockApi()`，Node/Vitest 使用导出的 `server`；详细路由与接入代码在包内 `mock-api/README.md`。
+只让支付创建接口稳定模拟 30% 渠道限流，其他路由保持全局配置：
+
+```bash
+npm run mock -- --template commerce --format mock-api \
+  --mock-api-route 'POST|/api/payments|120:500|30|429|支付渠道限流' \
+  --output artifacts/commerce-payment-failure.zip
+```
+
+`--mock-api-route` 可重复使用；格式为 `METHOD|/api/path|min:max|rate|status|message`。路径必须属于当前 Schema，控制接口不能被覆盖。
+
+导出 ZIP 已包含独立工程的精确依赖；解压后运行 `npm install` 即可。浏览器入口调用 `startMockApi()`，Node/Vitest 使用导出的 `server`；详细路由与接入代码在包内 `mock-api/README.md`。
 
 ## Cloudflare Pages
 

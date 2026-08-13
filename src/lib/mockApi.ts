@@ -1,6 +1,6 @@
 import type { DataRow, GeneratedData, ProjectSchema, TableSchema } from '../types'
 import { toOpenAPI } from './schemaExport'
-import { normalizeMockApiOptions, type MockApiOptions } from './mockApiOptions'
+import { normalizeMockApiOptionsForProject, type MockApiOptions } from './mockApiOptions'
 
 interface MockApiFile { name:string;content:string }
 const clean=(row:DataRow)=>Object.fromEntries(Object.entries(row).filter(([key])=>key!=='_mock_meta'))
@@ -14,7 +14,7 @@ export const mockApiControlRoutes=[
 ] as const
 
 export function mockApiRoutes(project:ProjectSchema,options?:Partial<MockApiOptions>){
-  const behavior=normalizeMockApiOptions(options)
+  const behavior=normalizeMockApiOptionsForProject(project,options)
   const routes=project.tables.map(table=>({
     resource:table.name,
     label:table.label,
@@ -31,7 +31,7 @@ export function mockApiRoutes(project:ProjectSchema,options?:Partial<MockApiOpti
 }
 
 export function mockApiConfig(project:ProjectSchema,options?:Partial<MockApiOptions>){
-  const config={seed:project.seed,...normalizeMockApiOptions(options)}
+  const config={seed:project.seed,...normalizeMockApiOptionsForProject(project,options)}
   return`export type MockApiRuntimeOptions = {
   seed: number
   latencyMinMs: number
@@ -42,6 +42,15 @@ export function mockApiConfig(project:ProjectSchema,options?:Partial<MockApiOpti
   validateForeignKeys: boolean
   deletePolicy: 'restrict' | 'cascade'
   nestedRoutes: boolean
+  routeOverrides: Array<{
+    method: 'GET' | 'POST' | 'PATCH' | 'DELETE'
+    path: string
+    latencyMinMs: number
+    latencyMaxMs: number
+    failureRate: number
+    failureStatus: number
+    failureMessage: string
+  }>
 }
 
 export const mockApiOptions: MockApiRuntimeOptions = ${JSON.stringify(config,null,2)}\n`
@@ -74,6 +83,14 @@ const resourceByName = new Map(resources.map(resource => [resource.resource, res
 const controlParams = new Set(['q', '_page', '_limit', '_sort', '_order'])
 const requestCounts = new Map<string, number>()
 const sameId = (left: unknown, right: unknown) => String(left) === String(right)
+const pathMatches = (pattern: string, pathname: string) => {
+  const expected = pattern.split('/'), actual = pathname.split('/')
+  return expected.length === actual.length && expected.every((part, index) => part.startsWith(':') || part === actual[index])
+}
+const requestScenario = (request: Request) => {
+  const pathname = new URL(request.url).pathname
+  return mockApiOptions.routeOverrides.find(rule => rule.method === request.method && pathMatches(rule.path, pathname)) ?? mockApiOptions
+}
 const requestJson = async (request: Request) => {
   try {
     return await request.json() as unknown
@@ -153,18 +170,21 @@ const requestRandom = (request: Request) => {
 }
 
 const withNetwork = async (request: Request, resolve: () => Response | Promise<Response>) => {
+  const scenario = requestScenario(request)
   const { latencyRoll, failureRoll } = requestRandom(request)
-  const span = mockApiOptions.latencyMaxMs - mockApiOptions.latencyMinMs
-  const latency = mockApiOptions.latencyMinMs + Math.floor((span + 1) * latencyRoll)
+  const span = scenario.latencyMaxMs - scenario.latencyMinMs
+  const latency = scenario.latencyMinMs + Math.floor((span + 1) * latencyRoll)
   if (latency > 0) await new Promise(done => setTimeout(done, latency))
-  if (failureRoll * 100 < mockApiOptions.failureRate) {
-    const response = errorResponse(mockApiOptions.failureStatus, 'Injected mock network failure')
+  if (failureRoll * 100 < scenario.failureRate) {
+    const response = errorResponse(scenario.failureStatus, 'failureMessage' in scenario ? scenario.failureMessage : 'Injected mock network failure')
     response.headers.set('X-Mock-Latency', String(latency))
     response.headers.set('X-Mock-Injected-Failure', 'true')
+    if ('path' in scenario) response.headers.set('X-Mock-Route-Override', scenario.method + ' ' + scenario.path)
     return response
   }
   const response = await resolve()
   response.headers.set('X-Mock-Latency', String(latency))
+  if ('path' in scenario) response.headers.set('X-Mock-Route-Override', scenario.method + ' ' + scenario.path)
   return response
 }
 
@@ -296,7 +316,7 @@ handlers.push(...batchHandlers, ...relationHandlers)
 }
 
 export function mockApiReadme(project:ProjectSchema,options?:Partial<MockApiOptions>){
-  const routes=mockApiRoutes(project,options),behavior=normalizeMockApiOptions(options)
+  const routes=mockApiRoutes(project,options),behavior=normalizeMockApiOptionsForProject(project,options)
   const nested=routes.flatMap(route=>route.nested)
   return`# ${project.name} Mock API
 
@@ -310,9 +330,10 @@ export function mockApiReadme(project:ProjectSchema,options?:Partial<MockApiOpti
 - 外键校验：${behavior.validateForeignKeys?'开启，悬空外键返回 HTTP 422':'关闭'}
 - 父记录删除：${behavior.deletePolicy==='restrict'?'存在子记录时返回 HTTP 409':'递归级联删除全部后代'}
 - 嵌套查询：${behavior.nestedRoutes?`开启，共 ${nested.length} 条父子路由`:'关闭'}
+- 单路由覆盖：${behavior.routeOverrides.length?`${behavior.routeOverrides.length} 条（${behavior.routeOverrides.map(rule=>`${rule.method} ${rule.path} → ${rule.latencyMinMs}–${rule.latencyMaxMs} ms / ${rule.failureRate}% HTTP ${rule.failureStatus}`).join('；')}）`:'无，全部使用全局网络场景'}
 - 确定性：相同 seed、请求方法、URL 和请求次序会得到相同延迟与失败序列；\`resetMockData()\` 同时重置数据与序列。
 
-可以直接修改 \`config.ts\` 调整这些值，范围已在导出时限制为延迟 0–10,000 ms、失败率 0–100%、状态码 400–599。
+可以直接修改 \`config.ts\` 调整这些值，范围已在导出时限制为延迟 0–10,000 ms、失败率 0–100%、状态码 400–599。单路由覆盖命中时会返回 \`X-Mock-Route-Override: METHOD /api/path\`，便于测试确认实际采用的规则。
 
 ## 独立运行测试
 
@@ -392,9 +413,10 @@ import { resetMockData, server } from './server'
 
 const origin = 'http://localhost'
 const unwrap = (body: unknown) => body && typeof body === 'object' && 'data' in body ? (body as { data: unknown }).data : body
+const configuredRouteOverrides = structuredClone(mockApiOptions.routeOverrides)
 
-beforeAll(() => { Object.assign(mockApiOptions, { latencyMinMs: 0, latencyMaxMs: 0, failureRate: 0 }); server.listen({ onUnhandledRequest: 'error' }) })
-afterEach(() => { Object.assign(mockApiOptions, { latencyMinMs: 0, latencyMaxMs: 0, failureRate: 0 }); server.resetHandlers(); resetMockData() })
+beforeAll(() => { Object.assign(mockApiOptions, { latencyMinMs: 0, latencyMaxMs: 0, failureRate: 0, routeOverrides: [] }); server.listen({ onUnhandledRequest: 'error' }) })
+afterEach(() => { Object.assign(mockApiOptions, { latencyMinMs: 0, latencyMaxMs: 0, failureRate: 0, routeOverrides: [] }); server.resetHandlers(); resetMockData() })
 afterAll(() => server.close())
 
 describe(${JSON.stringify(project.name+' Mock API')}, () => {
@@ -452,6 +474,19 @@ describe(${JSON.stringify(project.name+' Mock API')}, () => {
     const deleted = await fetch(origin + ${JSON.stringify(`/api/${relation.parent}/`)} + parentId, { method: 'DELETE' })
     expect(deleted.status).toBe(mockApiOptions.deletePolicy === 'restrict' && hasChildren ? 409 : 200)
   })`:''}
+
+  it('只在目标接口应用已配置的单路由场景', async () => {
+    const rule = configuredRouteOverrides[0]
+    if (!rule) return
+    mockApiOptions.routeOverrides = [{ ...rule, latencyMinMs: 0, latencyMaxMs: 0, failureRate: 100 }]
+    const path = rule.path.replace(':id', '__smoke__'), init = ['POST', 'PATCH'].includes(rule.method)
+      ? { method: rule.method, headers: { 'content-type': 'application/json' }, body: '{}' }
+      : { method: rule.method }
+    const response = await fetch(origin + path, init)
+    expect(response.status).toBe(rule.failureStatus)
+    expect(response.headers.get('X-Mock-Route-Override')).toBe(rule.method + ' ' + rule.path)
+    expect((await response.json() as { error: { message: string } }).error.message).toBe(rule.failureMessage)
+  })
 })
 `
 }
@@ -465,7 +500,7 @@ export function mockApiProjectFiles(project:ProjectSchema):MockApiFile[]{return[
 ]}
 
 export function mockApiFiles(project:ProjectSchema,data:GeneratedData,options?:Partial<MockApiOptions>):MockApiFile[]{
-  const normalized=normalizeMockApiOptions(options)
+  const normalized=normalizeMockApiOptionsForProject(project,options)
   const database=Object.fromEntries(project.tables.map(table=>[table.name,(data[table.id]??[]).map(clean)]))
   return[
     ...mockApiProjectFiles(project),

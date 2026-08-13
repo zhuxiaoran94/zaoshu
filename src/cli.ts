@@ -10,7 +10,7 @@ import { MAX_CONFIG_BYTES, parseProjectFile, serializeProject } from './lib/proj
 import { createSchemaContractPackage } from './lib/schemaExport'
 import type { DataMode, ProjectSchema } from './types'
 import { plannedProjectTotal } from './lib/cardinality'
-import { normalizeMockApiOptions, type MockApiDeletePolicy, type MockApiEnvelope, type MockApiOptions } from './lib/mockApiOptions'
+import { mockApiRouteKeys, normalizeMockApiOptions, type MockApiDeletePolicy, type MockApiEnvelope, type MockApiOptions } from './lib/mockApiOptions'
 
 const FORMATS=['schema','mock-api','bundle','json','jsonl','csv','tsv','yaml','xml','xlsx','mysql','postgres','sqlite','postman','playwright','cypress','jest','pytest','junit','markdown'] as const
 const MODES=['random','realistic','boundary','exception','pairwise'] as const
@@ -23,6 +23,7 @@ interface GenerateSummary {ok:boolean;dryRun:false;project:string;template:strin
 const needValue=(args:string[],index:number,flag:string)=>{const value=args[index+1];if(!value||value.startsWith('--'))throw new Error(`${flag} 需要一个值`);return value}
 const integer=(value:string,flag:string,min:number,max:number)=>{if(!/^\d+$/.test(value))throw new Error(`${flag} 必须是整数`);const parsed=Number(value);if(!Number.isSafeInteger(parsed)||parsed<min||parsed>max)throw new Error(`${flag} 必须在 ${min}–${max} 之间`);return parsed}
 const mockPatch=(options:CliOptions,patch:Partial<MockApiOptions>)=>{options.mockApi={...options.mockApi,...patch}}
+const mockRoute=(value:string)=>{const [method,path,latency,failureRate,failureStatus,...messageParts]=value.split('|'),normalizedMethod=method?.toUpperCase(),match=latency?.match(/^(\d+)(?::(\d+))?$/),validPath=path?.length<=200&&/^\/api\/[A-Za-z0-9_.:/-]+$/.test(path)&&!path.includes('..')&&!path.includes('//')&&!path.startsWith('/api/__mock/');if(!['GET','POST','PATCH','DELETE'].includes(normalizedMethod)||!validPath||!match||failureRate===undefined||failureStatus===undefined||!messageParts.join('|').trim())throw new Error('--mock-api-route 格式必须为 METHOD|/api/path|min:max|rate|status|message');const min=integer(match[1],'--mock-api-route',0,10_000),max=integer(match[2]??match[1],'--mock-api-route',0,10_000);if(max<min)throw new Error('--mock-api-route 最大延迟不能小于最小延迟');return{method:normalizedMethod,path,latencyMinMs:min,latencyMaxMs:max,failureRate:integer(failureRate,'--mock-api-route',0,100),failureStatus:integer(failureStatus,'--mock-api-route',400,599),failureMessage:messageParts.join('|')} as MockApiOptions['routeOverrides'][number]}
 
 export function parseCliArgs(args:string[]):CliOptions {
   const options:CliOptions={template:'commerce',format:'bundle',force:false,dryRun:false,failOnQuality:false,json:false,listTemplates:false,help:false}
@@ -42,6 +43,7 @@ export function parseCliArgs(args:string[]):CliOptions {
     else if(flag==='--mock-api-delete'){const value=needValue(args,index,flag);if(!['restrict','cascade'].includes(value))throw new Error('--mock-api-delete 仅支持 restrict, cascade');mockPatch(options,{deletePolicy:value as MockApiDeletePolicy});index++}
     else if(flag==='--mock-api-no-fk-check')mockPatch(options,{validateForeignKeys:false})
     else if(flag==='--mock-api-no-nested')mockPatch(options,{nestedRoutes:false})
+    else if(flag==='--mock-api-route'){const rule=mockRoute(needValue(args,index,flag));mockPatch(options,{routeOverrides:[...(options.mockApi?.routeOverrides??[]),rule]});index++}
     else if(flag==='--output'){options.output=needValue(args,index,flag);index++}
     else if(flag==='--summary'){options.summary=needValue(args,index,flag);index++}
     else if(flag==='--force')options.force=true
@@ -80,6 +82,7 @@ export const CLI_HELP=`Mock造数工具 CLI
   --mock-api-delete <policy>    restrict / cascade，默认阻止删除有子记录的父记录
   --mock-api-no-fk-check        不校验 POST/PATCH 外键完整性
   --mock-api-no-nested          不生成父子嵌套查询路由
+  --mock-api-route <rule>       单路由覆盖，可重复；METHOD|path|min:max|rate|status|message
   --output <file>       输出 ZIP 路径；默认当前目录下的安全文件名
   --summary <file>      额外写入机器可读 JSON 摘要
   --fail-on-quality     存在非预期质量失败时以退出码 2 结束
@@ -98,7 +101,8 @@ const safeOutputName=(name:string,format:string)=>`${name.replace(/[^A-Za-z0-9_\
 async function loadProject(options:CliOptions):Promise<ProjectSchema>{let project:ProjectSchema;if(options.config){const path=resolve(options.config),info=await stat(path);if(!info.isFile())throw new Error(`配置路径不是普通文件：${path}`);if(info.size>MAX_CONFIG_BYTES)throw new Error('配置文件不能超过 1 MB');project=parseProjectFile(await readFile(path,'utf8'))}else{if(!TEMPLATES.some(item=>item.templateId===options.template))throw new Error(`未知模板：${options.template}；可用 --list-templates 查看`);project=cloneTemplate(options.template)}if(options.seed!==undefined)project.seed=options.seed;if(options.referenceDate)project.referenceDate=options.referenceDate;if(options.mode)project.mode=options.mode;const count=options.count;if(count!==undefined)project.tables.forEach(table=>{table.count=count;table.countByReference=undefined});return parseProjectFile(serializeProject(project))}
 
 export async function runCli(options:CliOptions):Promise<DryRunSummary|GenerateSummary>{
-  const project=await loadProject(options),diagnostics=diagnoseProject(project),blocking=diagnostics.filter(issue=>issue.level==='error')
+  const project=await loadProject(options),allowedMockRoutes=mockApiRouteKeys(project,options.mockApi?.nestedRoutes),unknownMockRoutes=options.mockApi?.routeOverrides?.filter(rule=>!allowedMockRoutes.has(`${rule.method} ${rule.path}`))??[],diagnostics=diagnoseProject(project),blocking=diagnostics.filter(issue=>issue.level==='error')
+  if(unknownMockRoutes.length)throw new Error(`单路由场景与当前 Schema 不匹配：${unknownMockRoutes.map(rule=>`${rule.method} ${rule.path}`).join(', ')}`)
   if(blocking.length)throw new Error(`生成前检查失败：${blocking.map(issue=>`${issue.title}：${issue.detail}`).join('；')}`)
   if(options.dryRun)return{ok:true,dryRun:true,project:project.name,template:project.templateId,seed:project.seed,referenceDate:project.referenceDate,mode:project.mode,tables:project.tables.length,plannedRows:plannedProjectTotal(project),diagnostics:{errors:0,warnings:diagnostics.filter(issue=>issue.level==='warning').length}}
   const outputPath=resolve(options.output??safeOutputName(project.name,options.format)),summaryPath=options.summary?resolve(options.summary):undefined;if(summaryPath===outputPath)throw new Error('--output 与 --summary 不能指向同一个文件');await ensureWritable(outputPath,options.force);if(summaryPath)await ensureWritable(summaryPath,options.force)
