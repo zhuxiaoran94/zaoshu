@@ -353,6 +353,9 @@
 
 .schema-modal { width: min(780px, 100%); }
 .schema-input { display: grid; padding: 16px 18px 10px; }
+.schema-type-switch { display: flex; width: max-content; margin-bottom: 9px; border-radius: 7px; background: #e7eef1; padding: 3px; }
+.schema-type-switch button { border: 0; border-radius: 5px; background: transparent; padding: 6px 9px; color: var(--muted); font-size: 9px; }
+.schema-type-switch button.active { background: white; color: var(--blue); font-weight: 700; box-shadow: 0 1px 4px rgba(15,45,61,.09); }
 .schema-input-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; }
 .schema-input-head > span { color: var(--muted); font-size: 9px; }
 .schema-input-head .button { height: 29px; padding: 0 9px; font-size: 9px; }

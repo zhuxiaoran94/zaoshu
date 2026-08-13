@@ -19,4 +19,19 @@ describe('Schema 导入',()=>{
   it('拒绝无效、非对象和超大输入',()=>{
     expect(()=>importSchemaText('{')).toThrow(/JSON/);expect(()=>importSchemaText('123')).toThrow(/根节点/);expect(()=>importSchemaText(JSON.stringify(['a','b']))).toThrow(/对象元素/);expect(()=>importSchemaText(' '.repeat(1024*1024+1))).toThrow(/1 MB/)
   })
+  it('从 MySQL DDL 推断主键、唯一、枚举、精度和外键',()=>{
+    const ddl=`CREATE TABLE users (id BIGINT PRIMARY KEY, email VARCHAR(120) NOT NULL UNIQUE, status ENUM('正常','冻结'));\nCREATE TABLE orders (id BIGINT, user_id BIGINT NOT NULL, amount DECIMAL(12,2), paid TINYINT(1), metadata JSON, PRIMARY KEY (id), CONSTRAINT fk_user FOREIGN KEY (user_id) REFERENCES users(id));`
+    const result=importSchemaText(ddl),users=result.project.tables.find(table=>table.name==='users')!,orders=result.project.tables.find(table=>table.name==='orders')!
+    expect(result.source).toBe('sql');expect(users.fields.find(field=>field.name==='email')).toMatchObject({length:120,unique:true,missing:0});expect(users.fields.find(field=>field.name==='status')?.values).toEqual(['正常','冻结'])
+    expect(orders.fields.find(field=>field.name==='amount')).toMatchObject({dataType:'number',precision:2});expect(orders.fields.find(field=>field.name==='paid')?.dataType).toBe('boolean');expect(orders.fields.find(field=>field.name==='metadata')?.dataType).toBe('object');expect(orders.fields.find(field=>field.name==='user_id')?.ref).toEqual({tableId:users.id,field:'id'})
+  })
+  it('支持 PostgreSQL/SQLite 引号标识符和行内 REFERENCES',()=>{
+    const ddl=`CREATE TABLE "teams" ("id" UUID PRIMARY KEY, "name" TEXT NOT NULL); CREATE TABLE "members" ("id" INTEGER PRIMARY KEY, "team_id" UUID REFERENCES "teams"("id"), "joined_at" TIMESTAMP);`
+    const result=importSchemaText(ddl),teams=result.project.tables.find(table=>table.name==='teams')!,members=result.project.tables.find(table=>table.name==='members')!
+    expect(teams.fields.find(field=>field.name==='id')).toMatchObject({dataType:'string',generator:'uuid',primaryKey:true});expect(members.fields.find(field=>field.name==='team_id')?.ref).toEqual({tableId:teams.id,field:'id'});expect(members.fields.find(field=>field.name==='joined_at')?.dataType).toBe('date')
+  })
+  it('DDL 只识别 CREATE TABLE，不执行其中语句',()=>{
+    const result=importSchemaText(`DROP TABLE secrets; CREATE TABLE safe_table (id INTEGER PRIMARY KEY, note TEXT); INSERT INTO safe_table VALUES (1, 'x');`)
+    expect(result.project.tables.map(table=>table.name)).toEqual(['safe_table']);expect(result.project.tables[0].count).toBe(20)
+  })
 })

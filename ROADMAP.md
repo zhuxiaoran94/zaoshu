@@ -24,6 +24,7 @@
 - [x] YAML、XML 及六类测试框架 Fixture 导出
 - [x] ZIP 多文件交付包、Manifest 与 SHA-256 校验
 - [x] 首屏生成引擎拆包、按需加载与构建性能预算
+- [x] MySQL、PostgreSQL、SQLite DDL Schema 导入
 
 ## 近期版本
 
@@ -36,7 +37,6 @@
 ## 后续探索
 
 - [ ] OpenAPI 3.x YAML 与本地 `$ref` 解析
-- [ ] SQL DDL Schema 导入
 - [ ] TypeScript 类型推断
 - [ ] Web Streams 真正流式导出百万级数据
 - [ ] 可选的只读分享链接（不包含真实数据）

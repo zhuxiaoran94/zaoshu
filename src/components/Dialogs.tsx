@@ -34,13 +34,29 @@ const OPENAPI_SAMPLE=`{
     }}
   }}
 }`
+const SQL_SAMPLE=`CREATE TABLE users (
+  id BIGINT PRIMARY KEY,
+  email VARCHAR(120) NOT NULL UNIQUE,
+  status ENUM('正常', '冻结', '注销') NOT NULL,
+  created_at TIMESTAMP NOT NULL
+);
+
+CREATE TABLE orders (
+  id BIGINT PRIMARY KEY,
+  user_id BIGINT NOT NULL,
+  amount DECIMAL(12, 2) NOT NULL,
+  paid BOOLEAN,
+  metadata JSON,
+  CONSTRAINT fk_order_user FOREIGN KEY (user_id) REFERENCES users(id)
+);`
 
 export function SchemaImportDialog({open,onClose}:{open:boolean;onClose:()=>void}) {
-  const setProject=useAppStore(state=>state.setProject),input=useRef<HTMLInputElement>(null);const[text,setText]=useState(OPENAPI_SAMPLE),[preview,setPreview]=useState<ImportPreview|null>(null),[error,setError]=useState('');if(!open)return null
+  const setProject=useAppStore(state=>state.setProject),input=useRef<HTMLInputElement>(null);const[text,setText]=useState(OPENAPI_SAMPLE),[preview,setPreview]=useState<ImportPreview|null>(null),[error,setError]=useState(''),[sample,setSample]=useState<'openapi'|'sql'>('openapi');if(!open)return null
   const analyze=()=>{try{setPreview(importSchemaText(text));setError('')}catch(reason){setPreview(null);setError(reason instanceof Error?reason.message:'Schema 解析失败')}}
   const read=(file:File)=>{setError('');setPreview(null);if(file.size>MAX_CONFIG_BYTES)return setError('Schema 文件不能超过 1 MB');const reader=new FileReader();reader.onload=()=>setText(String(reader.result||''));reader.readAsText(file)}
   const apply=()=>{if(!preview)return;setProject(preview.project);onClose()}
-  return <div className="modal-backdrop" onMouseDown={event=>event.target===event.currentTarget&&onClose()}><section className="modal schema-modal"><header><div><span>SCHEMA IMPORT</span><h2>从 Schema 建立项目</h2><p>可选能力：内置模板无需导入。支持 OpenAPI 3 JSON 和普通 JSON 对象/数组。</p></div><button className="icon-button" onClick={onClose}><X/></button></header><div className="schema-input"><div className="schema-input-head"><span>粘贴 JSON，或读取本地文件</span><input hidden ref={input} type="file" accept=".json,application/json" onChange={event=>event.target.files?.[0]&&read(event.target.files[0])}/><button className="button ghost" onClick={()=>input.current?.click()}><Upload/>读取 JSON</button></div><textarea maxLength={MAX_CONFIG_BYTES} spellCheck={false} value={text} onChange={event=>{setText(event.target.value);setPreview(null)}}/><button className="button primary" onClick={analyze}><GitCompareArrows/>分析结构</button></div>{error&&<div className="dialog-message error">{error}</div>}{preview&&<div className="schema-preview"><header><div><strong>{preview.project.name}</strong><span>{preview.source==='openapi'?'OpenAPI 3.x':'JSON 样例'} · 本地解析</span></div><b>{preview.project.tables.length} 表 · {preview.project.tables.reduce((sum,table)=>sum+table.fields.length,0)} 字段</b></header><div>{preview.project.tables.map(table=><article key={table.id}><div><strong>{table.label}</strong><code>{table.name}</code></div><span>{table.count} 条</span><span>{table.fields.length} 字段</span><small>{table.fields.slice(0,5).map(field=>field.name).join('、')}{table.fields.length>5?'…':''}</small></article>)}</div>{preview.warnings.map(warning=><p key={warning}><AlertTriangle/>{warning}</p>)}</div>}<footer><span className="privacy-note">文件仅在浏览器本地读取，不上传服务器</span><button className="button ghost" onClick={onClose}>取消</button><button className="button primary" disabled={!preview} onClick={apply}>使用此结构</button></footer></section></div>
+  const selectSample=(next:'openapi'|'sql')=>{setSample(next);setText(next==='openapi'?OPENAPI_SAMPLE:SQL_SAMPLE);setPreview(null);setError('')}
+  return <div className="modal-backdrop" onMouseDown={event=>event.target===event.currentTarget&&onClose()}><section className="modal schema-modal"><header><div><span>SCHEMA IMPORT</span><h2>从 Schema 建立项目</h2><p>可选能力：内置模板无需导入。支持 OpenAPI/普通 JSON 和三类数据库 DDL。</p></div><button className="icon-button" onClick={onClose}><X/></button></header><div className="schema-input"><div className="schema-type-switch"><button className={sample==='openapi'?'active':''} onClick={()=>selectSample('openapi')}>OpenAPI / JSON</button><button className={sample==='sql'?'active':''} onClick={()=>selectSample('sql')}>SQL CREATE TABLE</button></div><div className="schema-input-head"><span>粘贴文本，或读取本地 `.json` / `.sql` 文件</span><input hidden ref={input} type="file" accept=".json,.sql,application/json,text/plain" onChange={event=>event.target.files?.[0]&&read(event.target.files[0])}/><button className="button ghost" onClick={()=>input.current?.click()}><Upload/>读取文件</button></div><textarea maxLength={MAX_CONFIG_BYTES} spellCheck={false} value={text} onChange={event=>{setText(event.target.value);setPreview(null)}}/><button className="button primary" onClick={analyze}><GitCompareArrows/>分析结构</button></div>{error&&<div className="dialog-message error">{error}</div>}{preview&&<div className="schema-preview"><header><div><strong>{preview.project.name}</strong><span>{preview.source==='openapi'?'OpenAPI 3.x':preview.source==='sql'?'SQL DDL':'JSON 样例'} · 本地解析</span></div><b>{preview.project.tables.length} 表 · {preview.project.tables.reduce((sum,table)=>sum+table.fields.length,0)} 字段</b></header><div>{preview.project.tables.map(table=><article key={table.id}><div><strong>{table.label}</strong><code>{table.name}</code></div><span>{table.count} 条</span><span>{table.fields.length} 字段</span><small>{table.fields.slice(0,5).map(field=>field.name).join('、')}{table.fields.length>5?'…':''}</small></article>)}</div>{preview.warnings.map(warning=><p key={warning}><AlertTriangle/>{warning}</p>)}</div>}<footer><span className="privacy-note">只解析结构，不连接数据库、不执行任何 SQL</span><button className="button ghost" onClick={onClose}>取消</button><button className="button primary" disabled={!preview} onClick={apply}>使用此结构</button></footer></section></div>
 }
 
 const downloadText=(text:string,name:string)=>{const url=URL.createObjectURL(new Blob([text],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
