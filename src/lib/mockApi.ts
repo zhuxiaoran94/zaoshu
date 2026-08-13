@@ -11,6 +11,8 @@ const packageName=(value:string)=>value.toLocaleLowerCase().replace(/[^a-z0-9-]+
 export const mockApiControlRoutes=[
   {method:'GET',path:'/api/__mock/health',description:'检查本地 Mock 数据状态，不经过网络故障注入'},
   {method:'POST',path:'/api/__mock/reset',description:'恢复全部初始数据和请求序列，不经过网络故障注入'},
+  {method:'GET',path:'/api/__mock/requests',description:'查询最近 500 条脱敏请求轨迹，不经过网络故障注入'},
+  {method:'DELETE',path:'/api/__mock/requests',description:'清空本地请求轨迹，不经过网络故障注入'},
 ] as const
 
 export function mockApiRoutes(project:ProjectSchema,options?:Partial<MockApiOptions>){
@@ -69,6 +71,7 @@ import { mockApiOptions } from './config'
 type MockRecord = Record<string, unknown>
 type MockDatabase = Record<string, MockRecord[]>
 type ResourceDefinition = { resource: string; key: string; numericKey: boolean; fields: readonly string[] }
+export type MockRequestLog = { id: string; sequence: number; method: string; path: string; status: number; latencyMs: number; injectedFailure: boolean; routeOverride?: string }
 
 const initialDb: MockDatabase = ${literal(initial)}
 export const db: MockDatabase = structuredClone(initialDb)
@@ -82,6 +85,8 @@ ${relationDefinitions}
 const resourceByName = new Map(resources.map(resource => [resource.resource, resource]))
 const controlParams = new Set(['q', '_page', '_limit', '_sort', '_order'])
 const requestCounts = new Map<string, number>()
+export const requestLog: MockRequestLog[] = []
+let requestSequence = 0
 const sameId = (left: unknown, right: unknown) => String(left) === String(right)
 const pathMatches = (pattern: string, pathname: string) => {
   const expected = pattern.split('/'), actual = pathname.split('/')
@@ -172,25 +177,32 @@ const requestRandom = (request: Request) => {
 const withNetwork = async (request: Request, resolve: () => Response | Promise<Response>) => {
   const scenario = requestScenario(request)
   const { latencyRoll, failureRoll } = requestRandom(request)
+  const sequence = ++requestSequence, requestId = 'mock-' + mockApiOptions.seed + '-' + String(sequence).padStart(6, '0')
   const span = scenario.latencyMaxMs - scenario.latencyMinMs
   const latency = scenario.latencyMinMs + Math.floor((span + 1) * latencyRoll)
+  const finalize = (response: Response, injectedFailure: boolean) => {
+    const routeOverride = 'path' in scenario ? scenario.method + ' ' + scenario.path : undefined
+    response.headers.set('X-Mock-Request-Id', requestId)
+    response.headers.set('X-Mock-Latency', String(latency))
+    if (injectedFailure) response.headers.set('X-Mock-Injected-Failure', 'true')
+    if (routeOverride) response.headers.set('X-Mock-Route-Override', routeOverride)
+    requestLog.push({ id: requestId, sequence, method: request.method, path: new URL(request.url).pathname, status: response.status, latencyMs: latency, injectedFailure, ...(routeOverride ? { routeOverride } : {}) })
+    if (requestLog.length > 500) requestLog.splice(0, requestLog.length - 500)
+    return response
+  }
   if (latency > 0) await new Promise(done => setTimeout(done, latency))
   if (failureRoll * 100 < scenario.failureRate) {
     const response = errorResponse(scenario.failureStatus, 'failureMessage' in scenario ? scenario.failureMessage : 'Injected mock network failure')
-    response.headers.set('X-Mock-Latency', String(latency))
-    response.headers.set('X-Mock-Injected-Failure', 'true')
-    if ('path' in scenario) response.headers.set('X-Mock-Route-Override', scenario.method + ' ' + scenario.path)
-    return response
+    return finalize(response, true)
   }
-  const response = await resolve()
-  response.headers.set('X-Mock-Latency', String(latency))
-  if ('path' in scenario) response.headers.set('X-Mock-Route-Override', scenario.method + ' ' + scenario.path)
-  return response
+  return finalize(await resolve(), false)
 }
 
 export const resetMockData = () => {
   for (const resource of resources) db[resource.resource] = structuredClone(initialDb[resource.resource])
   requestCounts.clear()
+  requestLog.length = 0
+  requestSequence = 0
 }
 
 export const handlers = resources.flatMap(resource => [
@@ -300,6 +312,7 @@ const databaseSummary = () => ({
   status: 'ok',
   seed: mockApiOptions.seed,
   tables: resources.length,
+  requests: requestLog.length,
   rows: Object.fromEntries(resources.map(resource => [resource.resource, db[resource.resource].length])),
 })
 const controlHandlers = [
@@ -307,6 +320,15 @@ const controlHandlers = [
   http.post('*/api/__mock/reset', () => {
     resetMockData()
     return HttpResponse.json(wrapped(databaseSummary()))
+  }),
+  http.get('*/api/__mock/requests', ({ request }) => {
+    const url = new URL(request.url), method = url.searchParams.get('method')?.toUpperCase(), statusValue = url.searchParams.get('status'), status = statusValue && /^\\d{3}$/.test(statusValue) ? Number(statusValue) : undefined, limit = Math.max(1, Math.min(500, Number(url.searchParams.get('_limit')) || 100))
+    const rows = requestLog.filter(item => (!method || item.method === method) && (!Number.isFinite(status) || item.status === status)).slice(-limit).reverse()
+    return HttpResponse.json(wrapped(rows, { total: rows.length, retained: requestLog.length }))
+  }),
+  http.delete('*/api/__mock/requests', () => {
+    requestLog.length = 0
+    return HttpResponse.json(wrapped({ cleared: true }))
   }),
 ]
 
@@ -383,18 +405,20 @@ ${routes.map(route=>`- \`GET ${route.list}?_page=1&_limit=20&_sort=${route.prima
 
 - \`GET /api/__mock/health\`：返回 seed、数据表数量及各表当前行数。
 - \`POST /api/__mock/reset\`：恢复全部初始数据并重置网络场景请求序列。
+- \`GET /api/__mock/requests?_limit=100&method=POST&status=429\`：倒序查询最近请求，可按方法和状态筛选。
+- \`DELETE /api/__mock/requests\`：只清空请求轨迹，不改变业务数据。
 
-控制接口不经过延迟和失败注入，确保极端故障场景下仍能检查与复位；它们只存在于本地 MSW 内存环境，不是远程管理接口。
+控制接口不经过延迟和失败注入，确保极端故障场景下仍能检查与复位；它们只存在于本地 MSW 内存环境，不是远程管理接口。请求轨迹最多保留 500 条，仅记录序号、方法、pathname、状态、延迟、故障标记和命中规则；不会记录查询参数、请求体、Authorization、Cookie 或其他 header。
 
 ${nested.length?`### 父子嵌套查询\n\n${nested.map(route=>`- \`GET ${route.path}\`（${route.parent} → ${route.child}.${route.foreignKey}）`).join('\n')}\n`:''}
 
-列表响应包含 \`X-Total-Count\`，业务响应包含实际等待毫秒数 \`X-Mock-Latency\`，注入失败额外包含 \`X-Mock-Injected-Failure: true\`；单页最多 1,000 条。POST 自动补充缺失主键并拒绝重复主键，PATCH 不允许修改主键，请求中不属于当前 Schema 的字段会被丢弃。开启外键校验时，POST/PATCH 的悬空外键返回 422。批量接口接受 JSON 数组或 \`{ items: [] }\`，任一条格式、主键或外键失败都会恢复该表到请求前状态，并在错误中返回从 0 开始的 \`index\`。
+列表响应包含 \`X-Total-Count\`，业务响应包含稳定请求编号 \`X-Mock-Request-Id\` 和实际等待毫秒数 \`X-Mock-Latency\`，注入失败额外包含 \`X-Mock-Injected-Failure: true\`；单页最多 1,000 条。POST 自动补充缺失主键并拒绝重复主键，PATCH 不允许修改主键，请求中不属于当前 Schema 的字段会被丢弃。开启外键校验时，POST/PATCH 的悬空外键返回 422。批量接口接受 JSON 数组或 \`{ items: [] }\`，任一条格式、主键或外键失败都会恢复该表到请求前状态，并在错误中返回从 0 开始的 \`index\`。
 
 ## 文件
 
 - \`db.json\`：可直接读取或交给 json-server 等兼容工具。
 - \`package.json\` / \`tsconfig.json\` / \`vitest.config.ts\`：独立可运行的测试工程配置，依赖使用精确版本。
-- \`handlers.test.ts\`：真实请求验证分页、CRUD、批量回滚、控制接口、复位与关系策略。
+- \`handlers.test.ts\`：真实请求验证分页、CRUD、批量回滚、脱敏追踪、控制接口、复位与关系策略。
 - \`config.ts\`：种子、延迟、失败率、失败状态码和响应格式。
 - \`handlers.ts\`：内存 CRUD、分页、搜索、字段筛选、排序与网络场景实现。
 - \`browser.ts\` / \`server.ts\`：浏览器和 Node 测试入口。
@@ -436,6 +460,23 @@ describe(${JSON.stringify(project.name+' Mock API')}, () => {
     expect((unwrap(await patchedResponse.json()) as Record<string, unknown>)[${JSON.stringify(firstPrimary.name)}]).toBe(id)
     expect((await fetch(origin + ${JSON.stringify(`/api/${first.name}/`)} + id, { method: 'DELETE' })).status).toBe(200)
     resetMockData(); expect(db[${JSON.stringify(first.name)}].some(row => String(row[${JSON.stringify(firstPrimary.name)}]) === String(id))).toBe(false)
+  })
+
+  it('记录可筛选的脱敏请求轨迹并支持单独清空', async () => {
+    const response = await fetch(origin + ${JSON.stringify(`/api/${first.name}?token=secret-value`)}, { headers: { authorization: 'Bearer private-token', cookie: 'session=private' } })
+    const requestId = response.headers.get('X-Mock-Request-Id')
+    expect(requestId).toMatch(new RegExp('^mock-' + mockApiOptions.seed + '-[0-9]{6}$'))
+    await response.json()
+    const logsResponse = await fetch(origin + '/api/__mock/requests?method=GET&status=200&_limit=1')
+    expect(logsResponse.status).toBe(200)
+    const logs = unwrap(await logsResponse.json()) as Array<{ id: string; path: string; status: number }>
+    expect(logs[0]).toMatchObject({ id: requestId, path: ${JSON.stringify(`/api/${first.name}`)}, status: 200 })
+    const serialized = JSON.stringify(logs)
+    expect(serialized).not.toContain('secret-value')
+    expect(serialized).not.toContain('private-token')
+    expect(serialized).not.toContain('session=private')
+    expect((await fetch(origin + '/api/__mock/requests', { method: 'DELETE' })).status).toBe(200)
+    expect(unwrap(await (await fetch(origin + '/api/__mock/requests')).json())).toEqual([])
   })
 
   it('批量写入原子回滚，并通过控制接口检查和复位', async () => {
@@ -507,8 +548,8 @@ export function mockApiFiles(project:ProjectSchema,data:GeneratedData,options?:P
     {name:'mock-api/db.json',content:JSON.stringify(database,null,2)},
     {name:'mock-api/config.ts',content:mockApiConfig(project,normalized)},
     {name:'mock-api/handlers.ts',content:mockApiHandlers(project,data,normalized)},
-    {name:'mock-api/browser.ts',content:"import { setupWorker } from 'msw/browser'\nimport { handlers, resetMockData } from './handlers'\n\nexport { resetMockData }\nexport const worker = setupWorker(...handlers)\nexport const startMockApi = () => worker.start({ onUnhandledRequest: 'bypass' })\n"},
-    {name:'mock-api/server.ts',content:"import { setupServer } from 'msw/node'\nimport { handlers, resetMockData } from './handlers'\n\nexport { resetMockData }\nexport const server = setupServer(...handlers)\n"},
+    {name:'mock-api/browser.ts',content:"import { setupWorker } from 'msw/browser'\nimport { handlers, requestLog, resetMockData } from './handlers'\n\nexport { requestLog, resetMockData }\nexport const worker = setupWorker(...handlers)\nexport const startMockApi = () => worker.start({ onUnhandledRequest: 'bypass' })\n"},
+    {name:'mock-api/server.ts',content:"import { setupServer } from 'msw/node'\nimport { handlers, requestLog, resetMockData } from './handlers'\n\nexport { requestLog, resetMockData }\nexport const server = setupServer(...handlers)\n"},
     {name:'mock-api/openapi.json',content:JSON.stringify(toOpenAPI(project,normalized),null,2)},
     {name:'mock-api/routes.json',content:JSON.stringify({behavior:normalized,controlRoutes:mockApiControlRoutes,routes:mockApiRoutes(project,normalized)},null,2)},
     {name:'mock-api/README.md',content:mockApiReadme(project,normalized)},

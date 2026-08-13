@@ -1,5 +1,26 @@
 # 更新日志
 
+## 5.1.0 - 请求追踪版
+
+### 本地可观测性
+
+- 每个业务请求生成稳定 `mock-{seed}-{sequence}` 请求编号，并通过 `X-Mock-Request-Id` 返回；复位后序列从 1 重新开始，回归结果可重复。
+- 内存环形日志只保留最近 500 条，记录请求序号、方法、pathname、响应状态、实际延迟、是否注入故障及命中的单路由规则。
+- `GET /api/__mock/requests` 倒序查询日志，支持 `_limit=1..500`、`method` 和 `status` 筛选；`DELETE /api/__mock/requests` 只清日志、不改变业务数据。
+- `GET /api/__mock/health` 新增当前日志数量，`POST /api/__mock/reset` 同时清空数据、请求计数、日志和追踪序号。
+
+### 隐私与契约
+
+- 日志只保存 URL pathname，明确不读取或记录 query、请求体、Authorization、Cookie 及其他 header，避免测试凭据和业务载荷进入调试轨迹。
+- 浏览器和 Node 入口均导出只读使用的 `requestLog` 引用，既可通过控制接口查看，也可在测试进程内直接断言。
+- OpenAPI 为全部业务响应声明 `X-Mock-Request-Id`，并完整描述轨迹查询参数、日志结构、清空接口和不记录敏感数据的边界。
+- `routes.json` 与包内 README 同步列出四个控制接口；控制接口仍不经过延迟或故障注入，也不会把自身查询写入业务轨迹。
+
+### 验证
+
+- 总测试数增至 127；专项测试连续执行 505 次请求验证只保留序号 6–505，并断言日志不包含 query token 或 Authorization 内容。
+- 真实导出工程通过严格类型检查、6 组 HTTP/MSW 测试和 npm 官方 0 漏洞审计；生产首屏保持约 448.0 KiB。
+
 ## 5.0.0 - 路由场景版
 
 ### 精确到接口的故障模拟
