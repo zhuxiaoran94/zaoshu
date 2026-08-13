@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { cloneTemplate } from './data/templates'
 import { useAppStore } from './store'
+import { planFieldPack } from './data/fieldPacks'
 
 describe('项目建模状态', () => {
   beforeEach(() => {
@@ -81,4 +82,6 @@ describe('项目建模状态', () => {
     state.bulkRemoveFields(users.id,[users.fields[0].id]);expect(useAppStore.getState().generationError).toMatch(/外键引用/)
     useAppStore.getState().bulkRemoveFields(products.id,products.fields.map(field=>field.id));expect(useAppStore.getState().project.tables.find(candidate=>candidate.id==='products')!.fields.length).toBe(products.fields.length);expect(useAppStore.getState().generationError).toMatch(/至少需要保留/)
   })
+
+  it('字段套餐整组添加只产生一次撤销记录',()=>{const state=useAppStore.getState(),table=state.project.tables.find(candidate=>candidate.id==='products')!,plan=planFieldPack(table.fields,'audit');state.appendFields(table.id,plan.fields);const changed=useAppStore.getState(),updated=changed.project.tables.find(candidate=>candidate.id===table.id)!;expect(updated.fields.length).toBe(table.fields.length+4);expect(changed.past).toHaveLength(1);changed.undo();expect(useAppStore.getState().project.tables.find(candidate=>candidate.id===table.id)!.fields.length).toBe(table.fields.length)})
 })

@@ -394,6 +394,39 @@
 .command-palette > footer svg { width: 12px; }
 .command-palette > footer b { margin-left: auto; color: var(--blue); font-weight: 650; }
 
+.field-pack-modal { width: min(760px, 100%); }
+.field-pack-layout { display: grid; grid-template-columns: 255px 1fr; min-height: 410px; }
+.field-pack-list { overflow: auto; border-right: 1px solid var(--line); padding: 9px; }
+.field-pack-list > button { display: grid; width: 100%; grid-template-columns: 25px 1fr auto; gap: 7px; align-items: center; border: 0; border-radius: 7px; background: transparent; padding: 8px; color: var(--ink); text-align: left; }
+.field-pack-list > button:hover,
+.field-pack-list > button.active { background: #e5f3f1; box-shadow: inset 0 0 0 1px #acd3ce; }
+.field-pack-list svg { width: 14px; color: var(--teal); }
+.field-pack-list span { display: flex; min-width: 0; flex-direction: column; }
+.field-pack-list strong { font-size: 10px; }
+.field-pack-list small { overflow: hidden; margin-top: 2px; color: var(--muted); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.field-pack-list em { border-radius: 9px; background: white; padding: 3px 6px; color: var(--blue); font: 8px ui-monospace, monospace; font-style: normal; }
+.field-pack-preview { overflow: auto; padding: 14px; }
+.field-pack-preview > header { display: flex; align-items: center; border-bottom: 1px solid var(--line); padding-bottom: 11px; }
+.field-pack-preview > header > div { display: flex; flex: 1; flex-direction: column; }
+.field-pack-preview > header span { color: var(--teal); font: 8px ui-monospace, monospace; letter-spacing: .12em; }
+.field-pack-preview > header strong { margin-top: 2px; font-size: 13px; }
+.field-pack-preview > header small { margin-top: 2px; color: var(--muted); font-size: 8px; }
+.field-pack-preview > header b { color: var(--teal); font: 22px ui-monospace, monospace; }
+.field-pack-conflict { display: grid; grid-template-columns: 1fr auto; gap: 3px 9px; margin-top: 10px; border: 1px solid #edcf94; border-radius: 8px; background: #fff9ec; padding: 9px; }
+.field-pack-conflict strong { color: #825f18; font-size: 9px; }
+.field-pack-conflict span { overflow: hidden; color: #987128; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.field-pack-conflict label { grid-column: 2; grid-row: 1 / 3; display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 8px; }
+.field-pack-conflict select { height: 28px; border: 1px solid #dbc17e; border-radius: 5px; background: white; color: var(--ink); font-size: 8px; }
+.field-pack-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 10px; }
+.field-pack-fields article { display: grid; grid-template-columns: 19px 1fr auto; gap: 6px; align-items: center; border: 1px solid var(--line); border-radius: 7px; background: white; padding: 7px; }
+.field-pack-fields article > svg { width: 12px; color: var(--teal); }
+.field-pack-fields article > span { display: flex; min-width: 0; flex-direction: column; }
+.field-pack-fields strong { font-size: 9px; }
+.field-pack-fields code { overflow: hidden; margin-top: 1px; color: var(--muted); font-size: 7px; text-overflow: ellipsis; }
+.field-pack-fields em { color: var(--blue); font: 7px ui-monospace, monospace; font-style: normal; }
+.field-pack-fields > p { grid-column: 1 / -1; margin: 20px 0; color: var(--muted); font-size: 9px; text-align: center; }
+.rename-note { display: block; margin-top: 8px; color: var(--muted); font-size: 8px; line-height: 1.5; }
+
 @media (max-width: 1100px) {
   .command-button { width: 36px; overflow: hidden; padding: 0; font-size: 0; }
   .command-button kbd { display: none; }
@@ -408,6 +441,13 @@
   .command-palette { width: 100%; border-radius: 14px 14px 0 0; }
   .command-results { max-height: 62vh; }
   .command-palette > footer span:nth-child(2) { display: none; }
+  .field-pack-layout { display: block; }
+  .field-pack-list { display: flex; max-height: none; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+  .field-pack-list > button { min-width: 155px; }
+  .field-pack-preview { max-height: 54vh; }
+  .field-pack-fields { grid-template-columns: 1fr; }
+  .field-pack-conflict { grid-template-columns: 1fr; }
+  .field-pack-conflict label { grid-column: 1; grid-row: auto; }
 }
 .pwa-status > button svg { width: 12px; }
 .pwa-status.offline { border-color: #dfbc7a; background: #fffaf0; }
