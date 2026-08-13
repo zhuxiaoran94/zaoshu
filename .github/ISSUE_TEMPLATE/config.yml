@@ -1,0 +1,6 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全漏洞报告
+    url: https://github.com/zhuxiaoran94/zaoshu/security
+    about: 请通过 Security 页面查看私下报告方式，不要公开漏洞细节或真实数据。
+

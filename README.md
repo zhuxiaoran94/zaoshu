@@ -2,7 +2,7 @@
 
 面向测试人员的浏览器端测试数据工作台。内置 120+ 字段生成类型和用户、电商、金融、游戏、社区、物流、测试通用七类场景，无需上传任何数据即可生成多表关联测试数据。
 
-当前版本：**3.4.0 隐私分享版**。网站没有匿名写入接口，访客的数据与配置仅保存在各自浏览器中。
+当前版本：**3.5.0 公共安全版**。网站没有匿名写入接口，访客的数据与配置仅保存在各自浏览器中。
 
 ## 功能
 
@@ -37,7 +37,7 @@
 - 导出支持 JSON/JSONL/CSV/TSV/YAML/XML/XLSX、三种 SQL 与六类测试 Fixture
 - 每次导出均为 ZIP，内附 Manifest、SHA-256、种子、Schema 版本和异常比例
 - 完整交付包一次包含全量 JSON、逐表 CSV、三种 SQL 与覆盖报告
-- Faker 生成引擎、Web Worker 和 XLSX 均按需加载，首屏主 JS 从约 948 KB 降至约 395 KB
+- Faker 生成引擎和 Web Worker 按需加载；XLSX 使用内部只写实现，不引入有已知高危漏洞的工作簿解析器
 - 构建内置 450 KB 首屏 JS 性能预算，超出即阻止版本发布
 - 支持 MySQL、PostgreSQL、SQLite `CREATE TABLE` DDL 导入，推断列、主键、唯一约束和外键
 - DDL 仅作文本结构解析，忽略 DROP/INSERT 等语句，不连接或执行数据库操作
@@ -86,6 +86,9 @@
 - 项目可复制为隐私分享链接，只携带通过校验的 Schema 与种子，不包含生成结果、数据池、快照或历史
 - 分享内容存放在 URL `#fragment` 中，不会随 HTTP 请求发送给 Cloudflare；打开后立即移除并创建独立本地副本
 - 分享链接最大 60,000 字符，超限项目改用 `.mock.json` 配置文件，损坏或伪造的分享内容会被拒绝
+- GitHub Actions 对每次 push/PR 运行锁定依赖安装、全部测试、生产构建、Cloudflare/PWA 产物与首屏体积检查
+- CI 和 Dependabot 阻断新增高危生产依赖漏洞，CODEOWNERS、PR 模板和贡献规则要求维护者审查公开改动
+- Excel 多表导出由受控 Office Open XML 写入器完成，只生成工作簿、不解析输入文件，并保留公式注入防护
 
 完整版本记录见 [CHANGELOG.md](./CHANGELOG.md)，已实现与待实现功能见 [ROADMAP.md](./ROADMAP.md)。
 
@@ -121,5 +124,10 @@ npm run build
 - CSP、禁止 iframe 嵌入、权限策略和跨源资源策略由 `_headers` 下发。
 - Service Worker 仅处理同源 GET 静态资源，不缓存第三方响应或任何写请求。
 - 大任务进入 Web Worker，单项目总生成量限制为 200,000 条，可主动取消。
+- 生产依赖的高危漏洞由 CI 阻断；Cloudflare 安全响应头与 SPA 回退规则在每次构建中自动检查。
 
 公开仓库不能阻止别人阅读或复制前端源码，但访客不能通过网站修改仓库、部署文件或其他用户的数据。
+
+公开贡献说明见 [CONTRIBUTING.md](./CONTRIBUTING.md)，漏洞请按 [SECURITY.md](./SECURITY.md) 私下报告，不要在 Issue 中公开真实数据或利用细节。
+
+项目使用 [MIT License](./LICENSE)，可以免费使用、修改和分发，但需保留版权与许可声明。

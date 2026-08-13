@@ -3,7 +3,7 @@ import { cloneTemplate } from '../data/templates'
 import { generateProject, matchesFieldCondition, regenerateDataRow } from './engine'
 import { refreshGeneratedResult, sortTables } from './modeling'
 import { analyzePairwiseCoverage, generatePairwise, generateStateEvents, parsePairwiseRules } from './labs'
-import { createExportPackage, createZip, neutralizeSpreadsheetFormula, sha256Fallback, toCSV, toSQL, toXML, toYAML } from './exporters'
+import { createExportPackage, createZip, neutralizeSpreadsheetFormula, sha256Fallback, toCSV, toSQL, toXLSX, toXML, toYAML } from './exporters'
 import { parseProjectFile, serializeProject } from './projectConfig'
 import type { FieldRule } from '../types'
 
@@ -133,6 +133,10 @@ describe('Mock造数引擎',()=>{
     expect(pack.manifest.files[0]).toMatchObject({name:expect.stringContaining('.csv'),bytes:expect.any(Number),sha256:expect.stringMatching(/^[a-f0-9]{64}$/)})
     expect(createZip([{name:'中文.txt',content:'测试'}]).length).toBeGreaterThan(40)
     expect(sha256Fallback(new TextEncoder().encode('abc'))).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad')
+  })
+  it('生成不依赖第三方解析器的多表 XLSX 并中和公式',()=>{
+    const project=cloneTemplate('users'),first=project.tables[0],second=project.tables[1],bytes=toXLSX({...project,tables:[first,second]},{[first.id]:[{id:1,name:'=HYPERLINK("https://evil.example")'}],[second.id]:[{id:2,user_id:1}]},new Date('2026-01-01T00:00:00Z')),text=new TextDecoder().decode(bytes)
+    expect(bytes[0]).toBe(0x50);expect(bytes[1]).toBe(0x4b);expect(text).toContain('[Content_Types].xml');expect(text).toContain('xl/worksheets/sheet2.xml');expect(text).toContain('&apos;=HYPERLINK(&quot;https://evil.example&quot;)')
   })
   it('真实分布支持加权枚举且可复现',()=>{
     const project=cloneTemplate('users');project.mode='realistic';const table=project.tables[0];table.count=1000;const status=table.fields.find(field=>field.name==='status')!;status.generator='customEnum';status.values=['普通','黄金','黑金'];status.weights=[80,15,5]

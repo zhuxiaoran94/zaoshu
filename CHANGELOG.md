@@ -1,5 +1,30 @@
 # 更新日志
 
+## 3.5.0 - 公共安全版
+
+### 供应链修复
+
+- 移除存在原型污染与 ReDoS 已知高危问题、且 npm 版本无修复方案的 `xlsx` / SheetJS 依赖。
+- 使用项目内受控的 Office Open XML 写入器保留多表 XLSX 导出，不再引入通用工作簿解析攻击面。
+- XLSX 字符串继续中和公式前缀，并转义 XML、过滤非法控制字符、限制单元格长度与工作表名。
+- 移除 9 个间接包和约 429 KB 的 XLSX 浏览器产物；官方 npm 生产依赖审计结果为零漏洞。
+
+### 自动质量闸门
+
+- 新增 GitHub Actions，对 `main` push 和 Pull Request 执行 `npm ci`、68 项测试、TypeScript 生产构建及产物检查。
+- CI 验证 Service Worker、Cloudflare SPA 回退、安全响应头、CSP 禁止 `unsafe-eval` 和 450 KB 首屏 JavaScript 预算。
+- 生产依赖出现 high/critical 漏洞时阻断，Pull Request 中新增的高危依赖也会单独审查。
+- Workflow 使用只读仓库权限、不保留 checkout 凭据，并限制并发和最长运行时间。
+- 新增 Dependabot 周期更新、CODEOWNERS、Pull Request 清单和脱敏 Bug 模板。
+
+### 公开协作
+
+- 新增 `CONTRIBUTING.md`，明确纯前端、本地处理、不可执行导入代码等贡献边界。
+- 新增 `SECURITY.md`，引导通过 GitHub Security 私下报告漏洞，避免公开利用细节和真实数据。
+- 新增 MIT License，明确允许公开使用、修改和分发，并要求保留版权与许可声明。
+- 文档明确 Branch protection 仍需仓库管理员在 GitHub 设置中开启，仓库内配置无法自行强制保护主分支。
+- 新增 XLSX 文件结构、多表输出和公式中和专项测试。
+
 ## 3.4.0 - 隐私分享版
 
 ### 新增

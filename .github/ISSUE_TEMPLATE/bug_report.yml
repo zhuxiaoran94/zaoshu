@@ -1,0 +1,45 @@
+name: Bug 报告
+description: 报告可复现的问题；安全漏洞请不要使用此模板
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: 请勿粘贴身份证、手机号、密钥、内部接口数据或未脱敏的项目配置。
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题描述
+      description: 实际发生了什么？期望行为是什么？
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 选择“电商系统”
+        2. 切换到“边界模式”
+        3. 点击“生成数据”
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      placeholder: 例如 3.5.0
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: 浏览器与系统
+      placeholder: 例如 Chrome 130 / macOS
+    validations:
+      required: true
+  - type: textarea
+    id: safe-example
+    attributes:
+      label: 已脱敏的最小样例
+      description: 可以粘贴不含真实业务信息的最小 Schema、报错文本或截图。
+
