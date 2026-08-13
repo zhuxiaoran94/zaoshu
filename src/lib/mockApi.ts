@@ -10,9 +10,14 @@ const relationSpecs=(project:ProjectSchema)=>project.tables.flatMap(child=>child
 const packageName=(value:string)=>value.toLocaleLowerCase().replace(/[^a-z0-9-]+/g,'-').replace(/^-+|-+$/g,'').slice(0,80)||'mock-api-project'
 export const mockApiControlRoutes=[
   {method:'GET',path:'/api/__mock/health',description:'检查本地 Mock 数据状态，不经过网络故障注入'},
-  {method:'POST',path:'/api/__mock/reset',description:'恢复全部初始数据和请求序列，不经过网络故障注入'},
+  {method:'POST',path:'/api/__mock/reset',description:'恢复全部初始数据并清空请求序列、轨迹和快照，不经过网络故障注入'},
   {method:'GET',path:'/api/__mock/requests',description:'查询最近 500 条脱敏请求轨迹，不经过网络故障注入'},
   {method:'DELETE',path:'/api/__mock/requests',description:'清空本地请求轨迹，不经过网络故障注入'},
+  {method:'GET',path:'/api/__mock/snapshots',description:'列出最多 10 个本地内存场景快照'},
+  {method:'POST',path:'/api/__mock/snapshots',description:'创建或覆盖本地内存场景快照，单个最多 5 MiB'},
+  {method:'DELETE',path:'/api/__mock/snapshots',description:'清空全部本地内存场景快照'},
+  {method:'POST',path:'/api/__mock/snapshots/:name/restore',description:'恢复指定场景快照的整库数据'},
+  {method:'DELETE',path:'/api/__mock/snapshots/:name',description:'删除指定场景快照'},
 ] as const
 
 export function mockApiRoutes(project:ProjectSchema,options?:Partial<MockApiOptions>){
@@ -72,6 +77,9 @@ type MockRecord = Record<string, unknown>
 type MockDatabase = Record<string, MockRecord[]>
 type ResourceDefinition = { resource: string; key: string; numericKey: boolean; fields: readonly string[] }
 export type MockRequestLog = { id: string; sequence: number; method: string; path: string; status: number; latencyMs: number; injectedFailure: boolean; routeOverride?: string }
+export type MockSnapshotSummary = { name: string; revision: number; bytes: number; totalRows: number; rows: Record<string, number> }
+type StoredSnapshot = { summary: MockSnapshotSummary; database: MockDatabase }
+type SnapshotResult = { ok: true; snapshot: MockSnapshotSummary; replaced: boolean } | { ok: false; status: number; message: string }
 
 const initialDb: MockDatabase = ${literal(initial)}
 export const db: MockDatabase = structuredClone(initialDb)
@@ -87,6 +95,10 @@ const controlParams = new Set(['q', '_page', '_limit', '_sort', '_order'])
 const requestCounts = new Map<string, number>()
 export const requestLog: MockRequestLog[] = []
 let requestSequence = 0
+const SNAPSHOT_LIMIT = 10
+const SNAPSHOT_MAX_BYTES = 5 * 1024 * 1024
+const snapshotStore = new Map<string, StoredSnapshot>()
+let snapshotRevision = 0
 const sameId = (left: unknown, right: unknown) => String(left) === String(right)
 const pathMatches = (pattern: string, pathname: string) => {
   const expected = pattern.split('/'), actual = pathname.split('/')
@@ -158,6 +170,29 @@ const cascadeDependents = (resource: ResourceDefinition, row: MockRecord, visite
   }
 }
 
+const validSnapshotName = (name: string) => /^[A-Za-z0-9一-龥_-]{1,40}$/.test(name)
+const snapshotRows = (database: MockDatabase) => Object.fromEntries(resources.map(resource => [resource.resource, database[resource.resource].length]))
+export const listMockSnapshots = () => [...snapshotStore.values()].map(item => structuredClone(item.summary)).sort((left, right) => right.revision - left.revision)
+export const saveMockSnapshot = (input: string): SnapshotResult => {
+  const name = input.trim(), replaced = snapshotStore.has(name)
+  if (!validSnapshotName(name)) return { ok: false, status: 400, message: 'Snapshot name must be 1-40 Chinese letters, ASCII letters, numbers, _ or -' }
+  if (!replaced && snapshotStore.size >= SNAPSHOT_LIMIT) return { ok: false, status: 409, message: 'Snapshot limit is 10' }
+  const serialized = JSON.stringify(db), bytes = new TextEncoder().encode(serialized).byteLength
+  if (bytes > SNAPSHOT_MAX_BYTES) return { ok: false, status: 413, message: 'Snapshot exceeds 5 MiB' }
+  const database = JSON.parse(serialized) as MockDatabase
+  const rows = snapshotRows(database), summary = { name, revision: ++snapshotRevision, bytes, totalRows: Object.values(rows).reduce((sum, count) => sum + count, 0), rows }
+  snapshotStore.set(name, { summary, database })
+  return { ok: true, snapshot: structuredClone(summary), replaced }
+}
+export const restoreMockSnapshot = (input: string) => {
+  const snapshot = snapshotStore.get(input.trim())
+  if (!snapshot) return null
+  for (const resource of resources) db[resource.resource] = structuredClone(snapshot.database[resource.resource])
+  return structuredClone(snapshot.summary)
+}
+export const deleteMockSnapshot = (input: string) => snapshotStore.delete(input.trim())
+export const clearMockSnapshots = () => { const cleared = snapshotStore.size; snapshotStore.clear(); snapshotRevision = 0; return cleared }
+
 const requestRandom = (request: Request) => {
   const url = new URL(request.url)
   const key = request.method + ' ' + url.pathname + url.search
@@ -203,6 +238,7 @@ export const resetMockData = () => {
   requestCounts.clear()
   requestLog.length = 0
   requestSequence = 0
+  clearMockSnapshots()
 }
 
 export const handlers = resources.flatMap(resource => [
@@ -313,6 +349,7 @@ const databaseSummary = () => ({
   seed: mockApiOptions.seed,
   tables: resources.length,
   requests: requestLog.length,
+  snapshots: snapshotStore.size,
   rows: Object.fromEntries(resources.map(resource => [resource.resource, db[resource.resource].length])),
 })
 const controlHandlers = [
@@ -329,6 +366,26 @@ const controlHandlers = [
   http.delete('*/api/__mock/requests', () => {
     requestLog.length = 0
     return HttpResponse.json(wrapped({ cleared: true }))
+  }),
+  http.get('*/api/__mock/snapshots', () => {
+    const rows = listMockSnapshots()
+    return HttpResponse.json(wrapped(rows, { total: rows.length, limit: SNAPSHOT_LIMIT }))
+  }),
+  http.post('*/api/__mock/snapshots', async ({ request }) => {
+    const body = asRecord(await requestJson(request))
+    if (!body || Object.keys(body).some(field => field !== 'name')) return errorResponse(400, 'JSON object with only name is required')
+    const result = saveMockSnapshot(typeof body.name === 'string' ? body.name : '')
+    if (!result.ok) return errorResponse(result.status, result.message)
+    return HttpResponse.json(wrapped(result.snapshot, { replaced: result.replaced }), { status: result.replaced ? 200 : 201 })
+  }),
+  http.delete('*/api/__mock/snapshots', () => HttpResponse.json(wrapped({ cleared: clearMockSnapshots() }))),
+  http.post('*/api/__mock/snapshots/:name/restore', ({ params }) => {
+    const snapshot = restoreMockSnapshot(String(params.name ?? ''))
+    return snapshot ? HttpResponse.json(wrapped(snapshot)) : errorResponse(404, 'Snapshot not found')
+  }),
+  http.delete('*/api/__mock/snapshots/:name', ({ params }) => {
+    const deleted = deleteMockSnapshot(String(params.name ?? ''))
+    return deleted ? HttpResponse.json(wrapped({ deleted: true })) : errorResponse(404, 'Snapshot not found')
   }),
 ]
 
@@ -404,11 +461,15 @@ ${routes.map(route=>`- \`GET ${route.list}?_page=1&_limit=20&_sort=${route.prima
 ### 控制接口
 
 - \`GET /api/__mock/health\`：返回 seed、数据表数量及各表当前行数。
-- \`POST /api/__mock/reset\`：恢复全部初始数据并重置网络场景请求序列。
+- \`POST /api/__mock/reset\`：恢复全部初始数据并清空网络序列、请求轨迹和场景快照。
 - \`GET /api/__mock/requests?_limit=100&method=POST&status=429\`：倒序查询最近请求，可按方法和状态筛选。
 - \`DELETE /api/__mock/requests\`：只清空请求轨迹，不改变业务数据。
+- \`GET /api/__mock/snapshots\`：列出当前场景快照。
+- \`POST /api/__mock/snapshots\`：以 \`{ "name": "before-refund" }\` 保存整库；同名时安全覆盖。
+- \`POST /api/__mock/snapshots/:name/restore\`：将全部业务表恢复到快照状态。
+- \`DELETE /api/__mock/snapshots/:name\`：删除单个快照；\`DELETE /api/__mock/snapshots\` 清空全部快照。
 
-控制接口不经过延迟和失败注入，确保极端故障场景下仍能检查与复位；它们只存在于本地 MSW 内存环境，不是远程管理接口。请求轨迹最多保留 500 条，仅记录序号、方法、pathname、状态、延迟、故障标记和命中规则；不会记录查询参数、请求体、Authorization、Cookie 或其他 header。
+控制接口不经过延迟和失败注入，确保极端故障场景下仍能检查与复位；它们只存在于本地 MSW 内存环境，不是远程管理接口。快照最多 10 个、每个最多 5 MiB，名称只允许 1–40 个中英文、数字、下划线或连字符；\`resetMockData()\` 会一并清除快照，保证测试隔离。请求轨迹最多保留 500 条，仅记录序号、方法、pathname、状态、延迟、故障标记和命中规则；不会记录查询参数、请求体、Authorization、Cookie 或其他 header。
 
 ${nested.length?`### 父子嵌套查询\n\n${nested.map(route=>`- \`GET ${route.path}\`（${route.parent} → ${route.child}.${route.foreignKey}）`).join('\n')}\n`:''}
 
@@ -418,7 +479,7 @@ ${nested.length?`### 父子嵌套查询\n\n${nested.map(route=>`- \`GET ${route.
 
 - \`db.json\`：可直接读取或交给 json-server 等兼容工具。
 - \`package.json\` / \`tsconfig.json\` / \`vitest.config.ts\`：独立可运行的测试工程配置，依赖使用精确版本。
-- \`handlers.test.ts\`：真实请求验证分页、CRUD、批量回滚、脱敏追踪、控制接口、复位与关系策略。
+- \`handlers.test.ts\`：真实请求验证分页、CRUD、批量回滚、脱敏追踪、场景快照、控制接口、复位与关系策略。
 - \`config.ts\`：种子、延迟、失败率、失败状态码和响应格式。
 - \`handlers.ts\`：内存 CRUD、分页、搜索、字段筛选、排序与网络场景实现。
 - \`browser.ts\` / \`server.ts\`：浏览器和 Node 测试入口。
@@ -477,6 +538,20 @@ describe(${JSON.stringify(project.name+' Mock API')}, () => {
     expect(serialized).not.toContain('session=private')
     expect((await fetch(origin + '/api/__mock/requests', { method: 'DELETE' })).status).toBe(200)
     expect(unwrap(await (await fetch(origin + '/api/__mock/requests')).json())).toEqual([])
+  })
+
+  it('保存、覆盖、恢复和删除整库场景快照', async () => {
+    const table = ${JSON.stringify(first.name)}, initialCount = db[table].length
+    const saved = await fetch(origin + '/api/__mock/snapshots', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'baseline_基线' }) })
+    expect(saved.status).toBe(201)
+    expect(unwrap(await saved.json())).toMatchObject({ name: 'baseline_基线', totalRows: expect.any(Number) })
+    expect((await fetch(origin + ${JSON.stringify(`/api/${first.name}`)}, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status).toBe(201)
+    expect(db[table]).toHaveLength(initialCount + 1)
+    expect((await fetch(origin + '/api/__mock/snapshots/baseline_%E5%9F%BA%E7%BA%BF/restore', { method: 'POST' })).status).toBe(200)
+    expect(db[table]).toHaveLength(initialCount)
+    expect(unwrap(await (await fetch(origin + '/api/__mock/snapshots')).json())).toHaveLength(1)
+    expect((await fetch(origin + '/api/__mock/snapshots/baseline_%E5%9F%BA%E7%BA%BF', { method: 'DELETE' })).status).toBe(200)
+    expect(unwrap(await (await fetch(origin + '/api/__mock/snapshots')).json())).toEqual([])
   })
 
   it('批量写入原子回滚，并通过控制接口检查和复位', async () => {
@@ -548,8 +623,8 @@ export function mockApiFiles(project:ProjectSchema,data:GeneratedData,options?:P
     {name:'mock-api/db.json',content:JSON.stringify(database,null,2)},
     {name:'mock-api/config.ts',content:mockApiConfig(project,normalized)},
     {name:'mock-api/handlers.ts',content:mockApiHandlers(project,data,normalized)},
-    {name:'mock-api/browser.ts',content:"import { setupWorker } from 'msw/browser'\nimport { handlers, requestLog, resetMockData } from './handlers'\n\nexport { requestLog, resetMockData }\nexport const worker = setupWorker(...handlers)\nexport const startMockApi = () => worker.start({ onUnhandledRequest: 'bypass' })\n"},
-    {name:'mock-api/server.ts',content:"import { setupServer } from 'msw/node'\nimport { handlers, requestLog, resetMockData } from './handlers'\n\nexport { requestLog, resetMockData }\nexport const server = setupServer(...handlers)\n"},
+    {name:'mock-api/browser.ts',content:"import { setupWorker } from 'msw/browser'\nimport { clearMockSnapshots, deleteMockSnapshot, handlers, listMockSnapshots, requestLog, resetMockData, restoreMockSnapshot, saveMockSnapshot } from './handlers'\n\nexport { clearMockSnapshots, deleteMockSnapshot, listMockSnapshots, requestLog, resetMockData, restoreMockSnapshot, saveMockSnapshot }\nexport const worker = setupWorker(...handlers)\nexport const startMockApi = () => worker.start({ onUnhandledRequest: 'bypass' })\n"},
+    {name:'mock-api/server.ts',content:"import { setupServer } from 'msw/node'\nimport { clearMockSnapshots, deleteMockSnapshot, handlers, listMockSnapshots, requestLog, resetMockData, restoreMockSnapshot, saveMockSnapshot } from './handlers'\n\nexport { clearMockSnapshots, deleteMockSnapshot, listMockSnapshots, requestLog, resetMockData, restoreMockSnapshot, saveMockSnapshot }\nexport const server = setupServer(...handlers)\n"},
     {name:'mock-api/openapi.json',content:JSON.stringify(toOpenAPI(project,normalized),null,2)},
     {name:'mock-api/routes.json',content:JSON.stringify({behavior:normalized,controlRoutes:mockApiControlRoutes,routes:mockApiRoutes(project,normalized)},null,2)},
     {name:'mock-api/README.md',content:mockApiReadme(project,normalized)},
