@@ -25,6 +25,7 @@
 - [x] ZIP 多文件交付包、Manifest 与 SHA-256 校验
 - [x] 首屏生成引擎拆包、按需加载与构建性能预算
 - [x] MySQL、PostgreSQL、SQLite DDL Schema 导入
+- [x] 六种真实数值/日期分布、枚举权重与业务模板预设
 
 ## 近期版本
 

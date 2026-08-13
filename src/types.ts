@@ -17,6 +17,8 @@ export interface FieldCondition {
   otherwise: 'null' | 'omit'
 }
 
+export type DistributionType = 'uniform' | 'normal' | 'longTail' | 'hotspot' | 'ascending' | 'descending'
+
 export interface FieldRule {
   id: string
   name: string
@@ -41,6 +43,8 @@ export interface FieldRule {
   formula?: string
   format?: string
   condition?: FieldCondition
+  distribution?: DistributionType
+  distributionCenter?: number
 }
 
 export interface TableSchema {

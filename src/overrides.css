@@ -356,6 +356,14 @@
 .schema-type-switch { display: flex; width: max-content; margin-bottom: 9px; border-radius: 7px; background: #e7eef1; padding: 3px; }
 .schema-type-switch button { border: 0; border-radius: 5px; background: transparent; padding: 6px 9px; color: var(--muted); font-size: 9px; }
 .schema-type-switch button.active { background: white; color: var(--blue); font-weight: 700; box-shadow: 0 1px 4px rgba(15,45,61,.09); }
+
+.distribution-card { border-color: #b8d8d5; background: #f7fcfb; }
+.distribution-intro { display: flex; justify-content: space-between; gap: 8px; margin: -3px 0 10px; border-radius: 6px; background: #e8f5f3; padding: 7px 8px; color: #17656b; font-size: 8px; }
+.distribution-intro small { color: var(--muted); font-size: 8px; }
+.distribution-preview { display: grid; grid-template-columns: 70px 1fr; align-items: end; margin-top: 10px; border-top: 1px dashed #bad5d7; padding-top: 9px; }
+.distribution-preview > div { color: var(--muted); font-size: 8px; }
+.distribution-preview > span { height: 45px; display: flex; align-items: end; gap: 3px; }
+.distribution-preview i { min-width: 6px; flex: 1; border-radius: 2px 2px 0 0; background: linear-gradient(#19a7a0,#78c9c3); }
 .schema-input-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; }
 .schema-input-head > span { color: var(--muted); font-size: 9px; }
 .schema-input-head .button { height: 29px; padding: 0 9px; font-size: 9px; }

@@ -45,6 +45,8 @@ const fieldSchema = z.object({
   formula: z.string().max(500).optional(),
   format: z.string().max(500).optional(),
   condition: conditionSchema.optional(),
+  distribution: z.enum(['uniform', 'normal', 'longTail', 'hotspot', 'ascending', 'descending']).optional(),
+  distributionCenter: z.number().finite().optional(),
 })
 
 const tableSchema = z.object({

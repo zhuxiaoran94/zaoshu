@@ -134,4 +134,15 @@ describe('Mock造数引擎',()=>{
     expect(createZip([{name:'中文.txt',content:'测试'}]).length).toBeGreaterThan(40)
     expect(sha256Fallback(new TextEncoder().encode('abc'))).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad')
   })
+  it('真实分布支持加权枚举且可复现',()=>{
+    const project=cloneTemplate('users');project.mode='realistic';const table=project.tables[0];table.count=1000;const status=table.fields.find(field=>field.name==='status')!;status.generator='customEnum';status.values=['普通','黄金','黑金'];status.weights=[80,15,5]
+    const first=generateProject(project).data.users.map(row=>row.status),second=generateProject(project).data.users.map(row=>row.status),ordinary=first.filter(value=>value==='普通').length
+    expect(first).toEqual(second);expect(ordinary).toBeGreaterThan(700);expect(ordinary).toBeLessThan(900)
+  })
+  it('真实数值分布支持趋势、正态和长尾',()=>{
+    const project=cloneTemplate('testing');project.mode='realistic';const table=project.tables[0];table.count=100;const duration=table.fields.find(field=>field.name==='duration')!;duration.min=0;duration.max=100;duration.distribution='ascending'
+    let values=generateProject(project).data.api_requests.map(row=>row.duration as number);expect(values[0]).toBe(0);expect(values.at(-1)).toBe(100);expect(values.every((value,index)=>index===0||value>=values[index-1])).toBe(true)
+    duration.distribution='normal';duration.distributionCenter=50;values=generateProject(project).data.api_requests.map(row=>row.duration as number);expect(values.reduce((sum,value)=>sum+value,0)/values.length).toBeGreaterThan(40);expect(values.reduce((sum,value)=>sum+value,0)/values.length).toBeLessThan(60)
+    duration.distribution='longTail';values=generateProject(project).data.api_requests.map(row=>row.duration as number);expect(values.filter(value=>value<50).length).toBeGreaterThan(70)
+  })
 })

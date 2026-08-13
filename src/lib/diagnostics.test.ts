@@ -36,4 +36,10 @@ describe('生成前约束诊断', () => {
     expect(ids).toContain(`condition-self-${field.id}-0`)
     expect(ids).toContain(`condition-field-${field.id}-1`)
   })
+
+  it('发现枚举权重数量和分布中心问题',()=>{
+    const project=cloneTemplate('users'),field=project.tables[0].fields.find(candidate=>candidate.name==='status')!,age=project.tables[0].fields.find(candidate=>candidate.name==='id')!;field.values=['A','B','C'];field.weights=[1,2];age.min=0;age.max=10;age.distributionCenter=20
+    const ids=diagnoseProject(project).map(issue=>issue.id);expect(ids).toContain(`weights-length-${field.id}`);expect(ids).toContain(`distribution-center-${age.id}`)
+    field.weights=[0,0,0];expect(diagnoseProject(project).map(issue=>issue.id)).toContain(`weights-zero-${field.id}`)
+  })
 })

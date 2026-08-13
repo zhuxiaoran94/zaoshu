@@ -63,9 +63,9 @@ export function matchesFieldCondition(field: FieldRule, row: DataRow) {
   return condition.combinator === 'or' ? matches.some(Boolean) : matches.every(Boolean)
 }
 
-function modeValue(field:FieldRule,rowIndex:number,mode:DataMode,pools:Record<string,string[]>) {
+function modeValue(field:FieldRule,rowIndex:number,mode:DataMode,pools:Record<string,string[]>,totalRows=1) {
   if(mode==='boundary') return boundaryValue(field,rowIndex)
-  return generateValue(field,rowIndex,pools)
+  return generateValue(field,rowIndex,pools,{mode,totalRows})
 }
 
 export function generateProject(project:ProjectSchema,pools:Record<string,string[]>={}):GenerateResult {
@@ -80,11 +80,11 @@ export function generateProject(project:ProjectSchema,pools:Record<string,string
         if(field.ref) {
           const parent=data[field.ref.tableId]||[]
           value=parent.length ? parent[Math.floor(random()*parent.length)][field.ref.field] : null
-        } else value=modeValue(field,i,project.mode,pools)
+        } else value=modeValue(field,i,project.mode,pools,table.count)
         if(field.nullable && random()*100<field.nullable) value=null
         if(field.unique) {
           const used=uniqueMap.get(field.name)??new Set(); let tries=0
-          while(used.has(value)&&tries++<50) value=modeValue(field,i+tries+hash(field.id),project.mode,pools)
+          while(used.has(value)&&tries++<50) value=modeValue(field,i+tries+hash(field.id),project.mode,pools,table.count)
           used.add(value); uniqueMap.set(field.name,used)
         }
         if(field.prefix&&value!=null) value=field.prefix+value
@@ -104,10 +104,12 @@ export function generateProject(project:ProjectSchema,pools:Record<string,string
   const checks=validate(project,data)
   const all=Object.values(data).flat(); const abnormal=all.filter(r=>r._mock_meta).length
   const enumFields=project.tables.flatMap(t=>t.fields).filter(f=>f.values?.length||['userStatus','orderStatus','transactionStatus','questStatus','logisticsStatus'].includes(f.generator))
+  const distributionFields=project.tables.flatMap(t=>t.fields).filter(f=>f.distribution||f.weights?.length)
   const coverage=[
     {label:'字段生成覆盖',value:100,detail:`${project.tables.reduce((n,t)=>n+t.fields.length,0)} 个字段已生成`},
     {label:'约束通过率',value:Math.round(checks.filter(c=>c.status==='pass').length/Math.max(1,checks.length)*100),detail:`${checks.filter(c=>c.status==='pass').length}/${checks.length} 项检查通过`},
     {label:'枚举覆盖',value:enumFields.length?Math.min(100,65+enumFields.length*4):100,detail:`覆盖 ${enumFields.length} 个枚举字段`},
+    {label:'真实分布配置',value:project.mode==='realistic'?(distributionFields.length?100:60):0,detail:project.mode==='realistic'?`${distributionFields.length} 个字段使用业务权重或趋势配置`:'切换到真实分布模式后统计'},
     {label:'异常策略覆盖',value:project.mode==='exception'?Math.min(100,Math.round(abnormal/7*100)):0,detail:`命中 ${abnormal} 条异常数据`},
   ]
   return {data,report:{duration:Math.round(performance.now()-started),totalRows:all.length,normalRows:all.length-abnormal,abnormalRows:abnormal,checks,coverage,generatedAt:new Date().toISOString()}}
@@ -121,9 +123,9 @@ export function regenerateDataRow(project:ProjectSchema,data:GeneratedData,table
     if(locked.has(field.name)){if(Object.prototype.hasOwnProperty.call(original,field.name))row[field.name]=original[field.name];continue}
     if(field.missing&&random()*100<field.missing)continue
     let value:unknown
-    if(field.ref){const parent=data[field.ref.tableId]||[];value=parent.length?parent[Math.floor(random()*parent.length)][field.ref.field]:null}else value=modeValue(field,rowIndex+nonce%10_000,project.mode,pools)
+    if(field.ref){const parent=data[field.ref.tableId]||[];value=parent.length?parent[Math.floor(random()*parent.length)][field.ref.field]:null}else value=modeValue(field,rowIndex+nonce%10_000,project.mode,pools,table.count)
     if(field.nullable&&random()*100<field.nullable)value=null
-    if(field.unique){const used=new Set((data[tableId]||[]).filter((_,index)=>index!==rowIndex).map(candidate=>candidate[field.name]));let tries=0;while(used.has(value)&&tries++<100)value=modeValue(field,rowIndex+nonce%10_000+tries+hash(field.id),project.mode,pools)}
+    if(field.unique){const used=new Set((data[tableId]||[]).filter((_,index)=>index!==rowIndex).map(candidate=>candidate[field.name]));let tries=0;while(used.has(value)&&tries++<100)value=modeValue(field,rowIndex+nonce%10_000+tries+hash(field.id),project.mode,pools,table.count)}
     if(field.prefix&&value!=null)value=field.prefix+value;if(field.suffix&&value!=null)value=String(value)+field.suffix;row[field.name]=value
   }
   table.fields.filter(field=>field.formula&&!locked.has(field.name)).forEach(field=>{row[field.name]=resolveFormula(field.formula!,row)})
