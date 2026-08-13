@@ -2,7 +2,7 @@
 
 面向测试人员的浏览器端测试数据工作台。内置 120+ 字段生成类型和用户、电商、金融、游戏、社区、物流、测试通用七类场景，无需上传任何数据即可生成多表关联测试数据。
 
-当前版本：**4.5.0 Mock API 交付版**。网站没有匿名写入接口，访客的数据与配置仅保存在各自浏览器中。
+当前版本：**4.6.0 网络场景版**。网站没有匿名写入接口，访客的数据与配置仅保存在各自浏览器中。
 
 ## 功能
 
@@ -137,6 +137,12 @@
 - 写请求按当前 Schema 字段白名单过滤，PATCH 锁定主键；导出的正常业务数据会剥离工具内部 `_mock_meta`
 - OpenAPI 3.1 不再只有数据模型，同时输出全部 CRUD 路径，可直接导入 Apifox、Postman 或 Swagger UI
 - Mock API 只在使用者自己的浏览器或测试进程中拦截请求，不会给 Cloudflare 公共站点增加数据库或匿名写接口
+- Mock API 导出前可配置 0–10 秒延迟区间、0–100% 失败率、400–599 失败状态码和三种成功响应包裹
+- 网络延迟与失败序列由项目种子、请求方法、URL 和同类请求次数确定，复位数据时同步复位序列，回归测试不产生随机偶发失败
+- 所有响应记录 `X-Mock-Latency`，注入失败额外记录 `X-Mock-Injected-Failure`，方便断言与问题定位
+- `config.ts`、`routes.json`、OpenAPI 3.1 与 Manifest 保存同一份网络行为，交付后仍可追溯本次 Mock 条件
+- OpenAPI 响应模型跟随原始 JSON、`{ data }` 或 `{ data, meta }` 选择变化，并声明分页元信息、失败响应和 Mock 响应头
+- 网络场景面板与生成逻辑按需加载，首屏仍保持在 450 KB 发布预算内
 
 完整版本记录见 [CHANGELOG.md](./CHANGELOG.md)，已实现与待实现功能见 [ROADMAP.md](./ROADMAP.md)。
 
@@ -197,6 +203,17 @@ npm run mock -- --template commerce --format schema --output artifacts/commerce-
 
 ```bash
 npm run mock -- --template commerce --seed 42 --format mock-api --output artifacts/commerce-mock-api.zip
+```
+
+模拟 120–480 ms 延迟、15% 的 HTTP 429，并使用带分页元信息的响应：
+
+```bash
+npm run mock -- --template commerce --seed 42 --format mock-api \
+  --mock-api-latency 120:480 \
+  --mock-api-failure-rate 15 \
+  --mock-api-failure-status 429 \
+  --mock-api-envelope data-meta \
+  --output artifacts/commerce-network-mock.zip
 ```
 
 解压后安装 `msw`，浏览器入口调用 `startMockApi()`，Node/Vitest 使用导出的 `server`；详细路由与接入代码在包内 `mock-api/README.md`。

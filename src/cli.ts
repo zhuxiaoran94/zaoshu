@@ -10,17 +10,19 @@ import { MAX_CONFIG_BYTES, parseProjectFile, serializeProject } from './lib/proj
 import { createSchemaContractPackage } from './lib/schemaExport'
 import type { DataMode, ProjectSchema } from './types'
 import { plannedProjectTotal } from './lib/cardinality'
+import { normalizeMockApiOptions, type MockApiEnvelope, type MockApiOptions } from './lib/mockApiOptions'
 
 const FORMATS=['schema','mock-api','bundle','json','jsonl','csv','tsv','yaml','xml','xlsx','mysql','postgres','sqlite','postman','playwright','cypress','jest','pytest','junit','markdown'] as const
 const MODES=['random','realistic','boundary','exception','pairwise'] as const
 type CliFormat=typeof FORMATS[number]
 
-export interface CliOptions {template:string;config?:string;seed?:number;referenceDate?:string;mode?:DataMode;count?:number;format:CliFormat;output?:string;summary?:string;force:boolean;dryRun:boolean;failOnQuality:boolean;json:boolean;listTemplates:boolean;help:boolean}
+export interface CliOptions {template:string;config?:string;seed?:number;referenceDate?:string;mode?:DataMode;count?:number;format:CliFormat;mockApi?:Partial<MockApiOptions>;output?:string;summary?:string;force:boolean;dryRun:boolean;failOnQuality:boolean;json:boolean;listTemplates:boolean;help:boolean}
 interface DryRunSummary {ok:true;dryRun:true;project:string;template:string;seed:number;referenceDate?:string;mode:DataMode;tables:number;plannedRows:number;diagnostics:{errors:number;warnings:number}}
 interface GenerateSummary {ok:boolean;dryRun:false;project:string;template:string;seed:number;referenceDate?:string;mode:DataMode;format:CliFormat;output:string;rows:number;normalRows:number;abnormalRows:number;durationMs:number;quality:{passed:number;expected:number;warnings:number;failed:number};coverage:unknown;manifest:unknown}
 
 const needValue=(args:string[],index:number,flag:string)=>{const value=args[index+1];if(!value||value.startsWith('--'))throw new Error(`${flag} 需要一个值`);return value}
 const integer=(value:string,flag:string,min:number,max:number)=>{if(!/^\d+$/.test(value))throw new Error(`${flag} 必须是整数`);const parsed=Number(value);if(!Number.isSafeInteger(parsed)||parsed<min||parsed>max)throw new Error(`${flag} 必须在 ${min}–${max} 之间`);return parsed}
+const mockPatch=(options:CliOptions,patch:Partial<MockApiOptions>)=>{options.mockApi={...options.mockApi,...patch}}
 
 export function parseCliArgs(args:string[]):CliOptions {
   const options:CliOptions={template:'commerce',format:'bundle',force:false,dryRun:false,failOnQuality:false,json:false,listTemplates:false,help:false}
@@ -33,6 +35,10 @@ export function parseCliArgs(args:string[]):CliOptions {
     else if(flag==='--count'){options.count=integer(needValue(args,index,flag),flag,1,100_000);index++}
     else if(flag==='--mode'){const value=needValue(args,index,flag);if(!MODES.includes(value as DataMode))throw new Error(`--mode 仅支持 ${MODES.join(', ')}`);options.mode=value as DataMode;index++}
     else if(flag==='--format'){const value=needValue(args,index,flag);if(!FORMATS.includes(value as CliFormat))throw new Error(`--format 仅支持 ${FORMATS.join(', ')}`);options.format=value as CliFormat;index++}
+    else if(flag==='--mock-api-latency'){const value=needValue(args,index,flag),match=value.match(/^(\d+)(?::(\d+))?$/);if(!match)throw new Error('--mock-api-latency 必须是毫秒或 min:max');const min=integer(match[1],flag,0,10_000),max=integer(match[2]??match[1],flag,0,10_000);if(max<min)throw new Error('--mock-api-latency 最大值不能小于最小值');mockPatch(options,{latencyMinMs:min,latencyMaxMs:max});index++}
+    else if(flag==='--mock-api-failure-rate'){mockPatch(options,{failureRate:integer(needValue(args,index,flag),flag,0,100)});index++}
+    else if(flag==='--mock-api-failure-status'){mockPatch(options,{failureStatus:integer(needValue(args,index,flag),flag,400,599)});index++}
+    else if(flag==='--mock-api-envelope'){const value=needValue(args,index,flag);if(!['plain','data','data-meta'].includes(value))throw new Error('--mock-api-envelope 仅支持 plain, data, data-meta');mockPatch(options,{envelope:value as MockApiEnvelope});index++}
     else if(flag==='--output'){options.output=needValue(args,index,flag);index++}
     else if(flag==='--summary'){options.summary=needValue(args,index,flag);index++}
     else if(flag==='--force')options.force=true
@@ -45,6 +51,8 @@ export function parseCliArgs(args:string[]):CliOptions {
   }
   if(options.config&&args.includes('--template'))throw new Error('--config 与 --template 不能同时使用')
   if(options.dryRun&&(options.output||options.summary))throw new Error('--dry-run 不会写文件，不能与 --output 或 --summary 同时使用')
+  if(options.mockApi&&options.format!=='mock-api')throw new Error('--mock-api-* 参数只能与 --format mock-api 同时使用')
+  if(options.mockApi)options.mockApi=normalizeMockApiOptions(options.mockApi)
   return options
 }
 
@@ -62,6 +70,10 @@ export const CLI_HELP=`Mock造数工具 CLI
   --mode <mode>         random / realistic / boundary / exception / pairwise
   --count <number>      将每张表的数量设置为同一值
   --format <format>     默认 bundle；支持 ${FORMATS.join(', ')}
+  --mock-api-latency <min:max>  Mock API 延迟毫秒范围，例如 100:500
+  --mock-api-failure-rate <n>   Mock API 确定性失败率，0–100
+  --mock-api-failure-status <n> 注入失败的 HTTP 状态码，400–599
+  --mock-api-envelope <shape>   plain / data / data-meta
   --output <file>       输出 ZIP 路径；默认当前目录下的安全文件名
   --summary <file>      额外写入机器可读 JSON 摘要
   --fail-on-quality     存在非预期质量失败时以退出码 2 结束
@@ -85,7 +97,7 @@ export async function runCli(options:CliOptions):Promise<DryRunSummary|GenerateS
   if(options.dryRun)return{ok:true,dryRun:true,project:project.name,template:project.templateId,seed:project.seed,referenceDate:project.referenceDate,mode:project.mode,tables:project.tables.length,plannedRows:plannedProjectTotal(project),diagnostics:{errors:0,warnings:diagnostics.filter(issue=>issue.level==='warning').length}}
   const outputPath=resolve(options.output??safeOutputName(project.name,options.format)),summaryPath=options.summary?resolve(options.summary):undefined;if(summaryPath===outputPath)throw new Error('--output 与 --summary 不能指向同一个文件');await ensureWritable(outputPath,options.force);if(summaryPath)await ensureWritable(summaryPath,options.force)
   if(options.format==='schema'){const pack=await createSchemaContractPackage(project),output=await writeSafe(outputPath,new Uint8Array(await pack.blob.arrayBuffer()),options.force),summary:GenerateSummary={ok:true,dryRun:false,project:project.name,template:project.templateId,seed:project.seed,referenceDate:project.referenceDate,mode:project.mode,format:options.format,output,rows:0,normalRows:0,abnormalRows:0,durationMs:0,quality:{passed:0,expected:0,warnings:diagnostics.filter(issue=>issue.level==='warning').length,failed:0},coverage:[],manifest:pack.manifest};if(summaryPath)await writeSafe(summaryPath,`${JSON.stringify(summary,null,2)}\n`,options.force);return summary}
-  const result=generateProject(project),pack=await createExportPackage(options.format,project,result.data,result.report,project.tables[0].id),output=await writeSafe(outputPath,new Uint8Array(await pack.blob.arrayBuffer()),options.force),qualityFailures=result.report.checks.filter(check=>check.status==='fail')
+  const result=generateProject(project),pack=await createExportPackage(options.format,project,result.data,result.report,project.tables[0].id,{mockApi:options.mockApi}),output=await writeSafe(outputPath,new Uint8Array(await pack.blob.arrayBuffer()),options.force),qualityFailures=result.report.checks.filter(check=>check.status==='fail')
   const summary:GenerateSummary={ok:qualityFailures.length===0,dryRun:false,project:project.name,template:project.templateId,seed:project.seed,referenceDate:project.referenceDate,mode:project.mode,format:options.format,output,rows:result.report.totalRows,normalRows:result.report.normalRows,abnormalRows:result.report.abnormalRows,durationMs:result.report.duration,quality:{passed:result.report.checks.filter(check=>check.status==='pass').length,expected:result.report.checks.filter(check=>check.status==='expected').length,warnings:result.report.checks.filter(check=>check.status==='warning').length,failed:qualityFailures.length},coverage:result.report.coverage,manifest:pack.manifest}
   if(summaryPath)await writeSafe(summaryPath,`${JSON.stringify(summary,null,2)}\n`,options.force)
   return summary

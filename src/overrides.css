@@ -333,6 +333,17 @@
   .cardinality-toolbar em { width: 100%; margin-left: 0; }
 }
 
+.mock-api-options { margin: 0 18px 14px; border: 1px solid #c9dfe2; border-radius: 9px; background: #edf7f6; padding: 11px; }
+.mock-api-options > header { display: flex; align-items: center; gap: 12px; margin-bottom: 9px; }
+.mock-api-options > header > div { display: flex; flex: 1; flex-direction: column; }
+.mock-api-options strong { color: var(--blue); font-size: 10px; }
+.mock-api-options span { margin-top: 2px; color: var(--muted); font-size: 8px; }
+.mock-api-options .button { height: 28px; padding: 0 9px; font-size: 9px; }
+.mock-api-options > div { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; }
+.mock-api-options label { display: flex; flex-direction: column; gap: 4px; color: #586f7c; font-size: 8px; }
+.mock-api-options input,.mock-api-options select { width: 100%; min-width: 0; border: 1px solid #bfd3da; border-radius: 6px; background: white; padding: 7px; color: var(--ink); font: 9px ui-monospace, monospace; }
+@media (max-width: 680px) { .mock-api-options > div { grid-template-columns: 1fr 1fr; } }
+
 .coverage-head { display: flex !important; justify-content: space-between; align-items: center !important; }
 .coverage-head > div { display: block; }
 .coverage-gaps { margin-top: 14px; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: #fff; }

@@ -1,5 +1,28 @@
 # 更新日志
 
+## 4.6.0 - 网络场景版
+
+### 可复现的弱网与失败
+
+- Mock API 导出面板新增延迟最小/最大值、确定性失败率、失败 HTTP 状态码和成功响应格式配置，无需手改生成代码。
+- 延迟限制在 0–10,000 ms，失败率限制在 0–100%，状态码限制在 400–599；恢复默认即可得到无延迟、无注入失败的普通接口。
+- 网络行为由项目 seed、请求方法、完整 URL 与同类请求次数稳定决定，相同操作序列可重复复现，不制造不可追踪的测试偶发失败。
+- `resetMockData()` 除恢复初始 CRUD 数据外，同时清空请求序列，Vitest/Node 示例默认在每条用例后复位。
+- 所有响应返回 `X-Mock-Latency`，注入失败返回 `X-Mock-Injected-Failure: true`，便于测试断言区分业务错误和网络场景。
+
+### 响应契约与交付
+
+- 成功响应支持原始 JSON、`{ data }` 和 `{ data, meta }`；列表的 meta 包含 page、limit 与 total。
+- 新增独立 `config.ts`，让使用者接入后继续调整 seed、延迟、失败率、状态码与响应结构。
+- OpenAPI 3.1 同步生成响应包裹、分页元信息、400/404/409/注入失败响应与 Mock 响应头；字段精确筛选参数也进入契约。
+- `routes.json` 与 Manifest 同步记录网络行为，压缩包离开工具后仍能审计生成条件。
+- CLI 新增 `--mock-api-latency`、`--mock-api-failure-rate`、`--mock-api-failure-status` 和 `--mock-api-envelope`，并阻止在非 Mock API 格式下误用。
+
+### 验证与性能
+
+- 新增参数规范化、CLI 边界、生成配置、响应契约、Manifest 与 handlers 网络逻辑测试，总测试数增至 114。
+- 实际 CLI 验收 245 条电商数据、8 个 Mock API 文件与 Manifest；生产构建通过，网络配置 UI 按需加载，首屏 JavaScript 约 447.2 KiB。
+
 ## 4.5.0 - Mock API 交付版
 
 ### 从数据文件到可调用接口
