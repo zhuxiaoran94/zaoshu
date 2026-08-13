@@ -572,6 +572,7 @@
 .export-modal { width: min(760px, 100%); }
 .export-modal .format-grid { grid-template-columns: repeat(4, 1fr); max-height: 390px; overflow: auto; }
 .export-modal .format-grid button:first-child { grid-column: span 2; border-color: #93c8c4; background: #effaf7; }
+.export-modal .format-grid button.requires-data:not(.active) { opacity: .58; }
 
 @media (max-width: 680px) {
   .schema-import-button { display: none; }

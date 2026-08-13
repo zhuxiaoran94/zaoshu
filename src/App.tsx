@@ -21,7 +21,7 @@ export default function App(){
     const modes:Array<[DataMode,string,string]>=[['random','随机模式','按字段规则快速生成'],['realistic','真实分布模式','按权重与分布生成'],['boundary','边界模式','覆盖最小值、最大值与空值'],['exception','异常模式','注入可追溯缺陷'],['pairwise','Pairwise 组合模式','用较少用例覆盖参数对']]
     return[
       {id:'generate',label:project.mode==='pairwise'?'打开组合实验室':'生成数据',hint:`当前 ${project.name} · seed ${project.seed}`,group:'快捷操作',keywords:'run mock 造数',shortcut:'⌘↵',disabled:isGenerating,action:run},
-      {id:'export',label:'打开导出中心',hint:result?`${result.report.totalRows.toLocaleString()} 条结果可导出`:'生成后可导出 18 种格式',group:'快捷操作',keywords:'download zip csv json xlsx sql',shortcut:'⌘⇧E',action:()=>setExportOpen(true)},
+      {id:'export',label:'打开导出中心',hint:result?`${result.report.totalRows.toLocaleString()} 条结果可导出`:'Schema 契约可直接导出；数据格式需先生成',group:'快捷操作',keywords:'download zip csv json xlsx sql schema openapi ddl',shortcut:'⌘⇧E',action:()=>setExportOpen(true)},
       {id:'project',label:'项目与本地数据',hint:'快照、历史、分享、备份与清理',group:'快捷操作',keywords:'snapshot history share backup',shortcut:'⌘⇧P',action:()=>setProjectOpen(true)},
       {id:'schema',label:'从 Schema 建立项目',hint:'OpenAPI、JSON、YAML、SQL DDL、TypeScript',group:'快捷操作',keywords:'import openapi yaml ddl typescript',action:()=>setSchemaOpen(true)},
       {id:'pool',label:'管理自定义数据池',hint:'导入公司内部枚举与业务码',group:'快捷操作',keywords:'custom enum data pool',action:()=>setPoolOpen(true)},

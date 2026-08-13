@@ -1,5 +1,25 @@
 # 更新日志
 
+## 3.9.0 - Schema 契约版
+
+### 新增
+
+- 导出中心新增 Schema 契约包，不要求先生成测试数据；打开未生成项目时会默认选中该格式。
+- 契约 ZIP 包含 JSON Schema 2020-12、OpenAPI 3.1、TypeScript 类型、MySQL/PostgreSQL/SQLite DDL 和 Markdown 关系说明。
+- JSON Schema 与 OpenAPI 保留类型、必填、可空、范围、枚举、长度和常用 format。
+- 使用 `x-mock-generator`、`x-mock-formula`、`x-mock-condition` 与 `x-foreign-key` 保留造数工具特有规则。
+- 三种 DDL 按外键依赖顺序建表，包含主键、唯一、必填和外键约束，并按方言映射类型与安全引用标识符。
+- TypeScript 接口包含字段中文说明、可选/可空语义、枚举字面量联合类型和外键注释。
+- 关系说明列出生成顺序、每表默认条数、字段数及全部跨表引用。
+
+### CLI 与交付完整性
+
+- CLI 新增 `--format schema`，可从七套内置模板或网页导出的 `.mock.json` 直接生成契约包。
+- Manifest 标记 `schema-contract` 类型、工具版本、Schema 版本、种子、生成时间，以及七个文件的字节数和 SHA-256。
+- 契约导出器按需加载为约 6.1 KB 独立模块，首屏 JavaScript 约 440.3 KiB，继续低于 450 KiB 预算。
+- 新增 4 组契约测试和 1 组 CLI 参数测试，总测试数增至 85。
+- 已真实生成并解包电商契约 ZIP，验证七个契约文件与 Manifest；网页端验证无数据时可直接导出且无应用错误。
+
 ## 3.8.0 - 字段套餐版
 
 ### 新增

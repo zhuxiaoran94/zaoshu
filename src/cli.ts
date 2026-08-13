@@ -7,9 +7,10 @@ import { diagnoseProject } from './lib/diagnostics'
 import { generateProject } from './lib/engine'
 import { createExportPackage } from './lib/exporters'
 import { MAX_CONFIG_BYTES, parseProjectFile, serializeProject } from './lib/projectConfig'
+import { createSchemaContractPackage } from './lib/schemaExport'
 import type { DataMode, ProjectSchema } from './types'
 
-const FORMATS=['bundle','json','jsonl','csv','tsv','yaml','xml','xlsx','mysql','postgres','sqlite','postman','playwright','cypress','jest','pytest','junit','markdown'] as const
+const FORMATS=['schema','bundle','json','jsonl','csv','tsv','yaml','xml','xlsx','mysql','postgres','sqlite','postman','playwright','cypress','jest','pytest','junit','markdown'] as const
 const MODES=['random','realistic','boundary','exception','pairwise'] as const
 type CliFormat=typeof FORMATS[number]
 
@@ -80,6 +81,7 @@ export async function runCli(options:CliOptions):Promise<DryRunSummary|GenerateS
   if(blocking.length)throw new Error(`生成前检查失败：${blocking.map(issue=>`${issue.title}：${issue.detail}`).join('；')}`)
   if(options.dryRun)return{ok:true,dryRun:true,project:project.name,template:project.templateId,seed:project.seed,mode:project.mode,tables:project.tables.length,plannedRows:project.tables.reduce((sum,table)=>sum+table.count,0),diagnostics:{errors:0,warnings:diagnostics.filter(issue=>issue.level==='warning').length}}
   const outputPath=resolve(options.output??safeOutputName(project.name,options.format)),summaryPath=options.summary?resolve(options.summary):undefined;if(summaryPath===outputPath)throw new Error('--output 与 --summary 不能指向同一个文件');await ensureWritable(outputPath,options.force);if(summaryPath)await ensureWritable(summaryPath,options.force)
+  if(options.format==='schema'){const pack=await createSchemaContractPackage(project),output=await writeSafe(outputPath,new Uint8Array(await pack.blob.arrayBuffer()),options.force),summary:GenerateSummary={ok:true,dryRun:false,project:project.name,template:project.templateId,seed:project.seed,mode:project.mode,format:options.format,output,rows:0,normalRows:0,abnormalRows:0,durationMs:0,quality:{passed:0,expected:0,warnings:diagnostics.filter(issue=>issue.level==='warning').length,failed:0},coverage:[],manifest:pack.manifest};if(summaryPath)await writeSafe(summaryPath,`${JSON.stringify(summary,null,2)}\n`,options.force);return summary}
   const result=generateProject(project),pack=await createExportPackage(options.format,project,result.data,result.report,project.tables[0].id),output=await writeSafe(outputPath,new Uint8Array(await pack.blob.arrayBuffer()),options.force),qualityFailures=result.report.checks.filter(check=>check.status==='fail')
   const summary:GenerateSummary={ok:qualityFailures.length===0,dryRun:false,project:project.name,template:project.templateId,seed:project.seed,mode:project.mode,format:options.format,output,rows:result.report.totalRows,normalRows:result.report.normalRows,abnormalRows:result.report.abnormalRows,durationMs:result.report.duration,quality:{passed:result.report.checks.filter(check=>check.status==='pass').length,expected:result.report.checks.filter(check=>check.status==='expected').length,warnings:result.report.checks.filter(check=>check.status==='warning').length,failed:qualityFailures.length},coverage:result.report.coverage,manifest:pack.manifest}
   if(summaryPath)await writeSafe(summaryPath,`${JSON.stringify(summary,null,2)}\n`,options.force)
@@ -87,6 +89,6 @@ export async function runCli(options:CliOptions):Promise<DryRunSummary|GenerateS
 }
 
 async function main(){
-  try{const options=parseCliArgs(process.argv.slice(2));if(options.help){console.log(CLI_HELP);return}if(options.listTemplates){const templates=TEMPLATES.map(project=>({id:project.templateId,name:project.name,tables:project.tables.length,rows:project.tables.reduce((sum,table)=>sum+table.count,0)}));console.log(options.json?JSON.stringify(templates):templates.map(item=>`${item.id.padEnd(12)} ${item.name} · ${item.tables} 表 · ${item.rows} 条`).join('\n'));return}const summary=await runCli(options);console.log(options.json?JSON.stringify(summary):summary.dryRun?`✓ 配置有效：${summary.project} · ${summary.tables} 表 · ${summary.plannedRows} 条 · seed ${summary.seed}`:`✓ 已生成 ${summary.rows} 条数据：${summary.output}`);if(!summary.dryRun&&options.failOnQuality&&!summary.ok)process.exitCode=2}catch(error){console.error(`Mock造数失败：${error instanceof Error?error.message:String(error)}`);process.exitCode=1}}
+  try{const options=parseCliArgs(process.argv.slice(2));if(options.help){console.log(CLI_HELP);return}if(options.listTemplates){const templates=TEMPLATES.map(project=>({id:project.templateId,name:project.name,tables:project.tables.length,rows:project.tables.reduce((sum,table)=>sum+table.count,0)}));console.log(options.json?JSON.stringify(templates):templates.map(item=>`${item.id.padEnd(12)} ${item.name} · ${item.tables} 表 · ${item.rows} 条`).join('\n'));return}const summary=await runCli(options);console.log(options.json?JSON.stringify(summary):summary.dryRun?`✓ 配置有效：${summary.project} · ${summary.tables} 表 · ${summary.plannedRows} 条 · seed ${summary.seed}`:summary.format==='schema'?`✓ 已导出 Schema 契约：${summary.output}`:`✓ 已生成 ${summary.rows} 条数据：${summary.output}`);if(!summary.dryRun&&options.failOnQuality&&!summary.ok)process.exitCode=2}catch(error){console.error(`Mock造数失败：${error instanceof Error?error.message:String(error)}`);process.exitCode=1}}
 
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)void main()

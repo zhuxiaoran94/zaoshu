@@ -1,0 +1,10 @@
+import { describe,expect,it } from 'vitest'
+import { cloneTemplate } from '../data/templates'
+import { createSchemaContractPackage,relationMarkdown,toDDL,toJSONSchema,toOpenAPI,toTypeScript } from './schemaExport'
+
+describe('Schema 契约导出',()=>{
+  it('JSON Schema 与 OpenAPI 保留类型、约束和外键扩展',()=>{const project=cloneTemplate('commerce'),schema=toJSONSchema(project),openapi=toOpenAPI(project);expect(schema.$schema).toContain('2020-12');expect(schema.$defs.orders.properties.userId['x-foreign-key']).toEqual({tableId:'users',field:'id'});expect(schema.$defs.products.properties.price.minimum).toBe(9.9);expect(openapi.openapi).toBe('3.1.0');expect(openapi.components.schemas.orders.required).toContain('userId')})
+  it('三种 DDL 按依赖顺序建表并声明主外键',()=>{const project=cloneTemplate('commerce'),mysql=toDDL(project,'mysql'),postgres=toDDL(project,'postgres'),sqlite=toDDL(project,'sqlite');expect(mysql.indexOf('`users`')).toBeLessThan(mysql.indexOf('`orders`'));expect(mysql).toContain('FOREIGN KEY (`userId`) REFERENCES `users` (`id`)');expect(postgres).toContain('TIMESTAMPTZ');expect(sqlite).toContain('CREATE TABLE IF NOT EXISTS "orders"')})
+  it('TypeScript 与关系说明可直接评审',()=>{const project=cloneTemplate('commerce'),types=toTypeScript(project),relations=relationMarkdown(project);expect(types).toContain('export interface Orders');expect(types).toContain('userId: number;');expect(relations).toContain('`orders.userId` → `users.id`')})
+  it('契约 ZIP 包含七个文件、Manifest 和校验值',async()=>{const result=await createSchemaContractPackage(cloneTemplate('users')),bytes=new Uint8Array(await result.blob.arrayBuffer()),text=new TextDecoder().decode(bytes);expect(bytes.slice(0,2)).toEqual(new Uint8Array([0x50,0x4b]));expect(text).toContain('json-schema.json');expect(text).toContain('ddl/postgres.sql');expect(text).toContain('manifest.json');expect(result.manifest.files).toHaveLength(7);expect(result.manifest.files.every(file=>/^[a-f0-9]{64}$/.test(file.sha256))).toBe(true)})
+})
