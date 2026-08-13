@@ -66,6 +66,8 @@
 - [x] 快照名称白名单、10 个数量上限、单个 5 MiB 限制、OpenAPI 契约与独立工程自测
 - [x] Mock API 原子批量修改、批量删除、失败索引与重复 ID 防护
 - [x] 批量删除 restrict/cascade 引用策略、级联数量、UI 路由场景与 OpenAPI 契约
+- [x] Mock API 受限 JSON 跨表原子事务与 create/update/delete 动作
+- [x] 事务安全别名引用、100 步/1 MiB/10 层限制、整库回滚与 OpenAPI 契约
 
 ## 近期版本
 
@@ -78,7 +80,7 @@
 - [ ] 多列复合外键建模与导出
 - [ ] 跨表业务断言、数值容差和条件生效范围
 - [x] Mock API 针对单条路由覆盖延迟、失败率与自定义错误响应
-- [ ] Mock API 跨表事务脚本
+- [x] Mock API 跨表事务脚本
 - [x] Mock API 批量修改与批量删除
 - [x] Mock API 自定义场景快照
 

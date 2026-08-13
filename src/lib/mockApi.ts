@@ -18,6 +18,7 @@ export const mockApiControlRoutes=[
   {method:'DELETE',path:'/api/__mock/snapshots',description:'清空全部本地内存场景快照'},
   {method:'POST',path:'/api/__mock/snapshots/:name/restore',description:'恢复指定场景快照的整库数据'},
   {method:'DELETE',path:'/api/__mock/snapshots/:name',description:'删除指定场景快照'},
+  {method:'POST',path:'/api/__mock/transactions',description:'原子执行最多 100 步受限跨表数据事务'},
 ] as const
 
 export function mockApiRoutes(project:ProjectSchema,options?:Partial<MockApiOptions>){
@@ -81,6 +82,7 @@ export type MockRequestLog = { id: string; sequence: number; method: string; pat
 export type MockSnapshotSummary = { name: string; revision: number; bytes: number; totalRows: number; rows: Record<string, number> }
 type StoredSnapshot = { summary: MockSnapshotSummary; database: MockDatabase }
 type SnapshotResult = { ok: true; snapshot: MockSnapshotSummary; replaced: boolean } | { ok: false; status: number; message: string }
+type ResolvedValue = { ok: true; value: unknown } | { ok: false; message: string }
 
 const initialDb: MockDatabase = ${literal(initial)}
 export const db: MockDatabase = structuredClone(initialDb)
@@ -98,6 +100,8 @@ export const requestLog: MockRequestLog[] = []
 let requestSequence = 0
 const SNAPSHOT_LIMIT = 10
 const SNAPSHOT_MAX_BYTES = 5 * 1024 * 1024
+const TRANSACTION_LIMIT = 100
+const TRANSACTION_MAX_BYTES = 1024 * 1024
 const snapshotStore = new Map<string, StoredSnapshot>()
 let snapshotRevision = 0
 const sameId = (left: unknown, right: unknown) => String(left) === String(right)
@@ -193,6 +197,31 @@ export const restoreMockSnapshot = (input: string) => {
 }
 export const deleteMockSnapshot = (input: string) => snapshotStore.delete(input.trim())
 export const clearMockSnapshots = () => { const cleared = snapshotStore.size; snapshotStore.clear(); snapshotRevision = 0; return cleared }
+const transactionAliasPattern = /^[A-Za-z][A-Za-z0-9_]{0,29}$/
+const transactionReferencePattern = /^\\$([A-Za-z][A-Za-z0-9_]{0,29})\\.([^.$\\s]{1,80})$/
+const resolveTransactionValue = (value: unknown, aliases: Map<string, MockRecord>, depth = 0): ResolvedValue => {
+  if (depth > 10) return { ok: false, message: 'Transaction value nesting exceeds 10 levels' }
+  if (typeof value === 'string') {
+    const reference = value.match(transactionReferencePattern)
+    if (!reference) return { ok: true, value }
+    const row = aliases.get(reference[1])
+    if (!row) return { ok: false, message: 'Unknown or forward alias: ' + reference[1] }
+    if (!Object.prototype.hasOwnProperty.call(row, reference[2])) return { ok: false, message: 'Alias field not found: ' + reference[1] + '.' + reference[2] }
+    return { ok: true, value: structuredClone(row[reference[2]]) }
+  }
+  if (Array.isArray(value)) {
+    const result: unknown[] = []
+    for (const item of value) { const resolved = resolveTransactionValue(item, aliases, depth + 1); if (!resolved.ok) return resolved; result.push(resolved.value) }
+    return { ok: true, value: result }
+  }
+  const record = asRecord(value)
+  if (record) {
+    const result: MockRecord = Object.create(null) as MockRecord
+    for (const [field, item] of Object.entries(record)) { const resolved = resolveTransactionValue(item, aliases, depth + 1); if (!resolved.ok) return resolved; result[field] = resolved.value }
+    return { ok: true, value: result }
+  }
+  return { ok: true, value }
+}
 
 const requestRandom = (request: Request) => {
   const url = new URL(request.url)
@@ -455,6 +484,66 @@ const controlHandlers = [
     const deleted = deleteMockSnapshot(String(params.name ?? ''))
     return deleted ? HttpResponse.json(wrapped({ deleted: true })) : errorResponse(404, 'Snapshot not found')
   }),
+  http.post('*/api/__mock/transactions', async ({ request }) => {
+    const text = await request.text()
+    if (new TextEncoder().encode(text).byteLength > TRANSACTION_MAX_BYTES) return errorResponse(413, 'Transaction exceeds 1 MiB')
+    let payload: unknown
+    try { payload = JSON.parse(text) } catch { return errorResponse(400, 'Valid JSON transaction required') }
+    const root = asRecord(payload), actions = Array.isArray(payload) ? payload : root?.actions
+    if (!Array.isArray(actions) || actions.length === 0) return errorResponse(400, 'Non-empty actions array required')
+    if (actions.length > TRANSACTION_LIMIT) return errorResponse(400, 'Transaction limit is 100 actions')
+    if (root && Object.keys(root).some(field => field !== 'actions')) return errorResponse(400, 'Transaction object only accepts actions')
+    const databaseSnapshot = structuredClone(db), aliases = new Map<string, MockRecord>(), results: Array<{ index: number; op: string; resource: string; row: MockRecord; alias?: string }> = []
+    const rollback = (status: number, message: string, index: number) => {
+      for (const definition of resources) db[definition.resource] = databaseSnapshot[definition.resource]
+      return errorResponse(status, message, { index })
+    }
+    let activeIndex = 0
+    try { for (let index = 0; index < actions.length; index++) {
+      activeIndex = index
+      const action = asRecord(actions[index]), op = action?.op, resourceName = action?.resource, alias = action?.as
+      if (!action || !['create', 'update', 'delete'].includes(String(op)) || typeof resourceName !== 'string') return rollback(400, 'Each action requires op and resource', index)
+      const allowed = op === 'create' ? ['op', 'resource', 'body', 'as'] : op === 'update' ? ['op', 'resource', 'id', 'changes', 'as'] : ['op', 'resource', 'id', 'as']
+      if (Object.keys(action).some(field => !allowed.includes(field))) return rollback(400, 'Unexpected transaction action field', index)
+      const resource = resourceByName.get(resourceName)
+      if (!resource) return rollback(400, 'Unknown resource: ' + resourceName, index)
+      if (alias !== undefined && (typeof alias !== 'string' || !transactionAliasPattern.test(alias))) return rollback(400, 'Alias must start with a letter and contain at most 30 ASCII letters, numbers or _', index)
+      if (typeof alias === 'string' && aliases.has(alias)) return rollback(409, 'Duplicate transaction alias: ' + alias, index)
+      let row: MockRecord
+      if (op === 'create') {
+        const resolved = resolveTransactionValue(action.body, aliases), body = resolved.ok ? asRecord(resolved.value) : null
+        if (!resolved.ok) return rollback(400, resolved.message, index)
+        if (!body) return rollback(400, 'Create action requires body object', index)
+        const inserted = insertRecord(body, resource)
+        if (!inserted.ok) return rollback(inserted.status, inserted.message, index)
+        row = inserted.row
+      } else {
+        const resolvedId = resolveTransactionValue(action.id, aliases)
+        if (!resolvedId.ok) return rollback(400, resolvedId.message, index)
+        if (!['string', 'number'].includes(typeof resolvedId.value)) return rollback(400, 'Update/delete action requires string or number id', index)
+        const rowIndex = db[resource.resource].findIndex(item => sameId(item[resource.key], resolvedId.value))
+        if (rowIndex < 0) return rollback(404, 'Record not found', index)
+        if (op === 'update') {
+          const resolved = resolveTransactionValue(action.changes, aliases), changes = resolved.ok ? asRecord(resolved.value) : null
+          if (!resolved.ok) return rollback(400, resolved.message, index)
+          if (!changes) return rollback(400, 'Update action requires changes object', index)
+          const candidate = { ...db[resource.resource][rowIndex], ...allowedBody(changes, resource), [resource.key]: db[resource.resource][rowIndex][resource.key] }
+          const invalid = invalidReference(candidate, resource)
+          if (invalid) return rollback(422, 'Foreign key not found: ' + invalid.childField + ' -> ' + invalid.parent + '.' + invalid.parentField, index)
+          db[resource.resource][rowIndex] = candidate
+          row = candidate
+        } else {
+          const dependents = dependentRows(resource, db[resource.resource][rowIndex])
+          if (dependents.length && mockApiOptions.deletePolicy === 'restrict') return rollback(409, 'Referenced by ' + dependents.length + ' child record(s)', index)
+          if (dependents.length) cascadeDependents(resource, db[resource.resource][rowIndex])
+          ;[row] = db[resource.resource].splice(rowIndex, 1)
+        }
+      }
+      if (typeof alias === 'string') aliases.set(alias, structuredClone(row))
+      results.push({ index, op: String(op), resource: resourceName, row: structuredClone(row), ...(typeof alias === 'string' ? { alias } : {}) })
+    } } catch (error) { return rollback(500, error instanceof Error ? error.message : 'Transaction failed', activeIndex) }
+    return HttpResponse.json(wrapped(results, { actions: results.length, aliases: [...aliases.keys()] }))
+  }),
 ]
 
 handlers.unshift(...controlHandlers, ...batchHandlers)
@@ -490,7 +579,7 @@ npm run typecheck
 npm test
 \`\`\`
 
-包内测试会真实启动 MSW Node server，验证分页、CRUD、原子批量增改删、控制接口、复位、外键、删除策略和嵌套路由。
+包内测试会真实启动 MSW Node server，验证分页、CRUD、原子批量增改删、跨表事务、控制接口、复位、外键、删除策略和嵌套路由。
 
 ## 接入已有项目
 
@@ -538,8 +627,9 @@ ${routes.map(route=>`- \`GET ${route.list}?_page=1&_limit=20&_sort=${route.prima
 - \`POST /api/__mock/snapshots\`：以 \`{ "name": "before-refund" }\` 保存整库；同名时安全覆盖。
 - \`POST /api/__mock/snapshots/:name/restore\`：将全部业务表恢复到快照状态。
 - \`DELETE /api/__mock/snapshots/:name\`：删除单个快照；\`DELETE /api/__mock/snapshots\` 清空全部快照。
+- \`POST /api/__mock/transactions\`：原子执行最多 100 步跨表 JSON 动作，支持 \`create/update/delete\` 与 \`$alias.field\` 引用。
 
-控制接口不经过延迟和失败注入，确保极端故障场景下仍能检查与复位；它们只存在于本地 MSW 内存环境，不是远程管理接口。快照最多 10 个、每个最多 5 MiB，名称只允许 1–40 个中英文、数字、下划线或连字符；\`resetMockData()\` 会一并清除快照，保证测试隔离。请求轨迹最多保留 500 条，仅记录序号、方法、pathname、状态、延迟、故障标记和命中规则；不会记录查询参数、请求体、Authorization、Cookie 或其他 header。
+控制接口不经过延迟和失败注入，确保极端故障场景下仍能检查与复位；它们只存在于本地 MSW 内存环境，不是远程管理接口。事务只解释受限 JSON，不执行 JavaScript、不请求外部 URL，限制 100 步、1 MiB 和 10 层值嵌套；任一步失败恢复整个数据库。快照最多 10 个、每个最多 5 MiB，名称只允许 1–40 个中英文、数字、下划线或连字符；\`resetMockData()\` 会一并清除快照，保证测试隔离。请求轨迹最多保留 500 条，仅记录序号、方法、pathname、状态、延迟、故障标记和命中规则；不会记录查询参数、请求体、Authorization、Cookie 或其他 header。
 
 ${nested.length?`### 父子嵌套查询\n\n${nested.map(route=>`- \`GET ${route.path}\`（${route.parent} → ${route.child}.${route.foreignKey}）`).join('\n')}\n`:''}
 
@@ -549,7 +639,7 @@ ${nested.length?`### 父子嵌套查询\n\n${nested.map(route=>`- \`GET ${route.
 
 - \`db.json\`：可直接读取或交给 json-server 等兼容工具。
 - \`package.json\` / \`tsconfig.json\` / \`vitest.config.ts\`：独立可运行的测试工程配置，依赖使用精确版本。
-- \`handlers.test.ts\`：真实请求验证分页、CRUD、批量回滚、脱敏追踪、场景快照、控制接口、复位与关系策略。
+- \`handlers.test.ts\`：真实请求验证分页、CRUD、批量回滚、跨表事务、脱敏追踪、场景快照、控制接口、复位与关系策略。
 - \`config.ts\`：种子、延迟、失败率、失败状态码和响应格式。
 - \`handlers.ts\`：内存 CRUD、原子批量增改删、分页、搜索、字段筛选、排序与网络场景实现。
 - \`browser.ts\` / \`server.ts\`：浏览器和 Node 测试入口。
@@ -560,6 +650,7 @@ ${nested.length?`### 父子嵌套查询\n\n${nested.map(route=>`- \`GET ${route.
 
 export function mockApiSmokeTests(project:ProjectSchema){
   const first=project.tables[0],firstPrimary=primary(first),firstMutable=first.fields.find(field=>field.name!==firstPrimary.name)??firstPrimary,relations=relationSpecs(project),relation=relations[0]
+  const relationParent=relation?project.tables.find(table=>table.name===relation.parent):undefined,relationChild=relation?project.tables.find(table=>table.name===relation.child):undefined
   const [nestedBefore,nestedAfter]=relation?.path.split(':id')??['','']
   return `import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { mockApiOptions } from './config'
@@ -622,6 +713,32 @@ describe(${JSON.stringify(project.name+' Mock API')}, () => {
     expect(unwrap(await (await fetch(origin + '/api/__mock/snapshots')).json())).toHaveLength(1)
     expect((await fetch(origin + '/api/__mock/snapshots/baseline_%E5%9F%BA%E7%BA%BF', { method: 'DELETE' })).status).toBe(200)
     expect(unwrap(await (await fetch(origin + '/api/__mock/snapshots')).json())).toEqual([])
+  })
+
+  it('用安全别名原子执行跨表事务并在失败时整库回滚', async () => {
+    const parentTable = ${JSON.stringify(relation?.parent??first.name)}, childTable = ${JSON.stringify(relation?.child??first.name)}
+    const beforeParent = db[parentTable].length, beforeChild = db[childTable].length
+    const actions = ${relation?`[
+      { op: 'create', resource: parentTable, body: {}, as: 'newParent' },
+      { op: 'create', resource: childTable, body: { ${JSON.stringify(relation.foreignKey)}: '$newParent.${primary(relationParent!).name}' }, as: 'newChild' },
+      { op: 'update', resource: parentTable, id: '$newParent.${primary(relationParent!).name}', changes: {} },
+      { op: 'delete', resource: childTable, id: '$newChild.${primary(relationChild!).name}' },
+      { op: 'delete', resource: parentTable, id: '$newParent.${primary(relationParent!).name}' },
+    ]`:`[{ op: 'create', resource: parentTable, body: {}, as: 'created' }]`}
+    const committed = await fetch(origin + '/api/__mock/transactions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ actions }) })
+    expect(committed.status).toBe(200)
+    expect(unwrap(await committed.json())).toHaveLength(actions.length)
+    expect(db[parentTable]).toHaveLength(beforeParent + ${relation?0:1})
+    expect(db[childTable]).toHaveLength(beforeChild + ${relation?0:1})
+    const beforeRollbackParent = db[parentTable].length, beforeRollbackChild = db[childTable].length
+    const rejected = await fetch(origin + '/api/__mock/transactions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify([
+      { op: 'create', resource: parentTable, body: {}, as: 'mustRollback' },
+      { op: 'update', resource: parentTable, id: '__missing__', changes: {} },
+    ]) })
+    expect(rejected.status).toBe(404)
+    expect((await rejected.json() as { error: { index: number } }).error.index).toBe(1)
+    expect(db[parentTable]).toHaveLength(beforeRollbackParent)
+    expect(db[childTable]).toHaveLength(beforeRollbackChild)
   })
 
   it('批量写入原子回滚，并通过控制接口检查和复位', async () => {
