@@ -18,7 +18,7 @@ describe('Mock API 交付包',()=>{
   it('为每张表生成统一 CRUD 路由并使用 :id 路径参数',()=>{
     const project=cloneTemplate('commerce'),routes=mockApiRoutes(project)
     expect(routes).toHaveLength(project.tables.length)
-    expect(routes[0]).toMatchObject({list:'/api/users',detail:'/api/users/:id',primaryKey:'id'})
+    expect(routes[0]).toMatchObject({list:'/api/users',detail:'/api/users/:id',primaryKey:'id',batchMethods:['POST','PATCH','DELETE']})
     expect(routes.every(route=>route.methods.join(',')==='GET,POST,PATCH,DELETE')).toBe(true)
   })
   it('生成可编译的 MSW v2 handlers，并包含分页、筛选、白名单和复位能力',()=>{
@@ -30,6 +30,8 @@ describe('Mock API 交付包',()=>{
     expect(source).toContain('const allowedBody =')
     expect(source).toContain('export const resetMockData')
     expect(source).toContain("http.post('*/api/' + resource.resource + '/_batch'")
+    expect(source).toContain("http.patch('*/api/' + resource.resource + '/_batch'")
+    expect(source).toContain("http.delete('*/api/' + resource.resource + '/_batch'")
     expect(source).toContain("http.get('*/api/__mock/health'")
     expect(source).toContain("http.post('*/api/__mock/reset'")
     expect(source).toContain("http.get('*/api/__mock/requests'")
@@ -52,6 +54,8 @@ describe('Mock API 交付包',()=>{
     expect(database).not.toContain('_mock_meta')
     expect(JSON.parse(openapi).paths['/api/api_requests/{id}']).toHaveProperty('patch')
     expect(JSON.parse(openapi).paths['/api/api_requests/_batch']).toHaveProperty('post')
+    expect(JSON.parse(openapi).paths['/api/api_requests/_batch']).toHaveProperty('patch')
+    expect(JSON.parse(openapi).paths['/api/api_requests/_batch']).toHaveProperty('delete')
     expect(JSON.parse(openapi).paths['/api/__mock/reset']).toHaveProperty('post')
     expect(JSON.parse(openapi).paths['/api/__mock/requests']).toHaveProperty('delete')
     expect(JSON.parse(openapi).paths['/api/__mock/requests'].get.responses['200'].content['application/json'].schema.properties.meta.required).toEqual(['total','retained'])
@@ -66,10 +70,10 @@ describe('Mock API 交付包',()=>{
   })
   it('规范化越界网络参数并固化为独立 config.ts',()=>{expect(normalizeMockApiOptions({latencyMinMs:-1,latencyMaxMs:50_000,failureRate:101,failureStatus:200,envelope:'wat' as never})).toEqual({latencyMinMs:0,latencyMaxMs:10_000,failureRate:100,failureStatus:400,envelope:'plain',validateForeignKeys:true,deletePolicy:'restrict',nestedRoutes:true,routeOverrides:[]});const config=mockApiConfig(cloneTemplate('users'),{failureRate:30});expect(config).toContain('"failureRate": 30');expect(config).toContain('MockApiRuntimeOptions')})
   it('安全规范化路由覆盖并让重复接口以后配置为准',()=>{const overrides=normalizeMockApiOptions({routeOverrides:[{method:'post' as never,path:'/api/payments',latencyMinMs:-1,latencyMaxMs:99_999,failureRate:120,failureStatus:200,failureMessage:' 限流\n重试 '},{method:'POST',path:'/api/payments',latencyMinMs:80,latencyMaxMs:120,failureRate:30,failureStatus:429,failureMessage:'支付渠道限流'},{method:'GET',path:'https://evil.test/api/users',latencyMinMs:0,latencyMaxMs:0,failureRate:100,failureStatus:503,failureMessage:'x'}]}).routeOverrides;expect(overrides).toEqual([{method:'POST',path:'/api/payments',latencyMinMs:80,latencyMaxMs:120,failureRate:30,failureStatus:429,failureMessage:'支付渠道限流'}])})
-  it('按当前 Schema 过滤不存在或已关闭的路由覆盖',()=>{const project=cloneTemplate('commerce'),rule={latencyMinMs:0,latencyMaxMs:0,failureRate:100,failureStatus:503,failureMessage:'x'};expect(normalizeMockApiOptionsForProject(project,{routeOverrides:[{...rule,method:'POST',path:'/api/payments'},{...rule,method:'GET',path:'/api/unknown'},{...rule,method:'GET',path:'/api/users/:id/orders'}]}).routeOverrides.map(item=>`${item.method} ${item.path}`)).toEqual(['POST /api/payments','GET /api/users/:id/orders']);expect(normalizeMockApiOptionsForProject(project,{nestedRoutes:false,routeOverrides:[{...rule,method:'GET',path:'/api/users/:id/orders'}]}).routeOverrides).toEqual([])})
+  it('按当前 Schema 过滤不存在或已关闭的路由覆盖',()=>{const project=cloneTemplate('commerce'),rule={latencyMinMs:0,latencyMaxMs:0,failureRate:100,failureStatus:503,failureMessage:'x'};expect(normalizeMockApiOptionsForProject(project,{routeOverrides:[{...rule,method:'POST',path:'/api/payments'},{...rule,method:'PATCH',path:'/api/orders/_batch'},{...rule,method:'DELETE',path:'/api/orders/_batch'},{...rule,method:'GET',path:'/api/unknown'},{...rule,method:'GET',path:'/api/users/:id/orders'}]}).routeOverrides.map(item=>`${item.method} ${item.path}`)).toEqual(['POST /api/payments','PATCH /api/orders/_batch','DELETE /api/orders/_batch','GET /api/users/:id/orders']);expect(normalizeMockApiOptionsForProject(project,{nestedRoutes:false,routeOverrides:[{...rule,method:'GET',path:'/api/users/:id/orders'}]}).routeOverrides).toEqual([])})
   it('按 Schema 生成外键检查、删除策略和父子嵌套路由',()=>{const project=cloneTemplate('commerce'),data=generateProject(project).data,source=mockApiHandlers(project,data,{deletePolicy:'cascade'}),routes=mockApiRoutes(project),openapi=JSON.parse(mockApiFiles(project,data).find(file=>file.name==='mock-api/openapi.json')!.content);expect(source).toContain('const invalidReference =');expect(source).toContain('cascadeDependents');expect(source).toContain("errorResponse(422, 'Foreign key not found:");expect(source).toContain("mockApiOptions.deletePolicy === 'restrict'");expect(source).toContain("http.get('*/api/' + resource.resource");expect(routes.find(route=>route.resource==='users')?.nested).toEqual(expect.arrayContaining([expect.objectContaining({path:'/api/users/:id/orders',foreignKey:'userId'})]));expect(openapi.paths['/api/users/{id}/orders']).toHaveProperty('get');expect(openapi.paths['/api/orders/{id}'].delete.responses).toHaveProperty('409');expect(openapi.paths['/api/orders'].post.responses).toHaveProperty('422')})
   it('同一父子表存在多条外键时生成不冲突的嵌套路由',()=>{const project=cloneTemplate('testing'),table=project.tables[1],parent=project.tables[0];table.fields[1].ref={tableId:parent.id,field:'id'};table.fields[2].ref={tableId:parent.id,field:'id'};const data=generateProject(project).data,routes=mockApiRoutes(project).find(route=>route.resource===parent.name)!.nested,openapi=JSON.parse(mockApiFiles(project,data).find(file=>file.name==='mock-api/openapi.json')!.content);expect(routes.map(route=>route.path)).toEqual(expect.arrayContaining([`/api/${parent.name}/:id/${table.name}/by-${table.fields[1].name}`,`/api/${parent.name}/:id/${table.name}/by-${table.fields[2].name}`]));expect(openapi.paths[`/api/${parent.name}/{id}/${table.name}/by-${table.fields[1].name}`]).toHaveProperty('get');expect(openapi.paths[`/api/${parent.name}/{id}/${table.name}/by-${table.fields[2].name}`]).toHaveProperty('get')})
-  it('生成的独立 Vitest 用例语法有效且覆盖核心接口',()=>{const project=cloneTemplate('commerce'),source=mockApiSmokeTests(project),errors=transpileModule(source,{compilerOptions:{target:ScriptTarget.ES2022,module:ModuleKind.ESNext},reportDiagnostics:true}).diagnostics?.filter(item=>item.category===DiagnosticCategory.Error)??[];expect(errors).toEqual([]);expect(source).toContain("server.listen({ onUnhandledRequest: 'error' })");expect(source).toContain("it('列表支持分页并返回总数'");expect(source).toContain("it('完成新增、修改、删除并可复位'");expect(source).toContain("it('记录可筛选的脱敏请求轨迹并支持单独清空'");expect(source).toContain("it('保存、覆盖、恢复和删除整库场景快照'");expect(source).toContain("it('批量写入原子回滚，并通过控制接口检查和复位'");expect(source).toContain("it('执行 Schema 外键、删除策略与嵌套路由'");expect(source).toContain("it('只在目标接口应用已配置的单路由场景'")})
+  it('生成的独立 Vitest 用例语法有效且覆盖核心接口',()=>{const project=cloneTemplate('commerce'),source=mockApiSmokeTests(project),errors=transpileModule(source,{compilerOptions:{target:ScriptTarget.ES2022,module:ModuleKind.ESNext},reportDiagnostics:true}).diagnostics?.filter(item=>item.category===DiagnosticCategory.Error)??[];expect(errors).toEqual([]);expect(source).toContain("server.listen({ onUnhandledRequest: 'error' })");expect(source).toContain("it('列表支持分页并返回总数'");expect(source).toContain("it('完成新增、修改、删除并可复位'");expect(source).toContain("it('记录可筛选的脱敏请求轨迹并支持单独清空'");expect(source).toContain("it('保存、覆盖、恢复和删除整库场景快照'");expect(source).toContain("method: 'PATCH'");expect(source).toContain("method: 'DELETE'");expect(source).toContain("it('批量写入原子回滚，并通过控制接口检查和复位'");expect(source).toContain("it('执行 Schema 外键、删除策略与嵌套路由'");expect(source).toContain("it('只在目标接口应用已配置的单路由场景'")})
   it('生成可独立运行并严格类型检查的工程配置',()=>{const project=cloneTemplate('commerce'),files=mockApiFiles(project,generateProject(project).data),packageFile=JSON.parse(files.find(file=>file.name==='mock-api/package.json')!.content),tsconfig=files.find(file=>file.name==='mock-api/tsconfig.json')!.content;expect(packageFile.scripts).toMatchObject({typecheck:'tsc --noEmit',test:'vitest run'});expect(packageFile.engines.node).toBe('>=18');expect(packageFile.devDependencies).toEqual({'@types/node':'22.10.2',msw:'2.7.3',typescript:'5.7.3',vitest:'3.2.7'});expect(tsconfig).toContain('Bundler');expect(tsconfig).toContain('ESNext.Disposable')})
   it('实际运行生成 handler：拒绝悬空外键、阻止误删并支持递归级联',async()=>{
     const project=cloneTemplate('commerce');project.tables.forEach(table=>{table.count=4;table.countByReference=undefined});const data=generateProject(project).data,source=mockApiHandlers(project,data),defaults=normalizeMockApiOptions(),restricted=executeHandlers(source,defaults)
@@ -88,6 +92,33 @@ describe('Mock API 交付包',()=>{
     const beforeFailure=runtime.db.users.length,duplicate=runtime.db.users[0].id,failed=await batch.resolver({request:new Request('http://mock.local/api/users/_batch',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify([{}, {id:duplicate}])}),params:{}}),failureBody=await failed.json() as {error:{index:number}};expect(failed.status).toBe(409);expect(failureBody.error.index).toBe(1);expect(runtime.db.users).toHaveLength(beforeFailure)
     expect(runtime.handlers[0].path).toBe('*/api/__mock/health');const health=runtime.handlers.find(handler=>handler.method==='get'&&handler.path.endsWith('/api/__mock/health'))!,healthResponse=await health.resolver({request:new Request('http://mock.local/api/__mock/health'),params:{}}),summary=await healthResponse.json() as {rows:Record<string,number>};expect(summary.rows.users).toBe(beforeFailure)
     const reset=runtime.handlers.find(handler=>handler.method==='post'&&handler.path.endsWith('/api/__mock/reset'))!,resetResponse=await reset.resolver({request:new Request('http://mock.local/api/__mock/reset',{method:'POST'}),params:{}});expect(resetResponse.status).toBe(200);expect(runtime.db.users).toHaveLength(initial)
+  })
+  it('批量修改与删除在任一失败时保持原子并遵循引用策略',async()=>{
+    const project=cloneTemplate('commerce');project.tables.forEach(table=>{table.count=4;table.countByReference=undefined})
+    const data=generateProject(project).data,restricted=executeHandlers(mockApiHandlers(project,data),normalizeMockApiOptions())
+    const patch=restricted.handlers.find(handler=>handler.method==='patch'&&handler.path.endsWith('/api/orders/_batch'))!
+    const ids=restricted.db.orders.slice(0,2).map(row=>row.id),before=restricted.db.orders.slice(0,2).map(row=>row.status)
+    const invalidPatch=await patch.resolver({request:new Request('http://mock.local/api/orders/_batch',{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify([{id:ids[0],changes:{status:'批量测试'}},{id:'missing',changes:{status:'失败'}}])}),params:{}})
+    expect(invalidPatch.status).toBe(404);expect(restricted.db.orders.slice(0,2).map(row=>row.status)).toEqual(before)
+    const patchBody=ids.map(id=>({id,changes:{status:'批量测试'}}))
+    const validPatch=await patch.resolver({request:new Request('http://mock.local/api/orders/_batch',{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify(patchBody)}),params:{}})
+    expect(validPatch.status).toBe(200);expect(restricted.db.orders.filter(row=>ids.includes(row.id)).every(row=>row.status==='批量测试')).toBe(true)
+    const deleteUsers=restricted.handlers.find(handler=>handler.method==='delete'&&handler.path.endsWith('/api/users/_batch'))!
+    const parentId=restricted.db.orders[0].userId,freeUser=restricted.db.users.find(row=>!restricted.db.orders.some(order=>order.userId===row.id))?.id
+    const deleteIds=freeUser===undefined?[parentId,'missing']:[freeUser,parentId],usersBefore=structuredClone(restricted.db.users)
+    const blocked=await deleteUsers.resolver({request:new Request('http://mock.local/api/users/_batch',{method:'DELETE',headers:{'content-type':'application/json'},body:JSON.stringify({ids:deleteIds})}),params:{}})
+    expect(blocked.status).toBe(deleteIds.includes('missing')?404:409);expect(restricted.db.users).toEqual(usersBefore)
+    const cascading=executeHandlers(mockApiHandlers(project,data),normalizeMockApiOptions({deletePolicy:'cascade'}))
+    const cascadeBatch=cascading.handlers.find(handler=>handler.method==='delete'&&handler.path.endsWith('/api/users/_batch'))!
+    const anotherParent=cascading.db.orders.find(row=>row.userId!==cascading.db.orders[0].userId)?.userId
+    const cascadeParentIds=[cascading.db.orders[0].userId,anotherParent].filter((value,index,all)=>value!==undefined&&all.indexOf(value)===index)
+    const orderIds=new Set(cascading.db.orders.filter(row=>cascadeParentIds.includes(row.userId)).map(row=>row.id))
+    const deleted=await cascadeBatch.resolver({request:new Request('http://mock.local/api/users/_batch',{method:'DELETE',headers:{'content-type':'application/json'},body:JSON.stringify(cascadeParentIds)}),params:{}})
+    const body=await deleted.json() as Record<string,unknown>[]
+    expect(deleted.status).toBe(200);expect(body).toHaveLength(cascadeParentIds.length)
+    expect(cascading.db.users.some(row=>cascadeParentIds.includes(row.id))).toBe(false)
+    expect(cascading.db.orders.some(row=>cascadeParentIds.includes(row.userId))).toBe(false)
+    expect(cascading.db.order_items.some(row=>orderIds.has(row.orderId))).toBe(false)
   })
   it('只对命中的路由覆盖故障场景并返回可审计响应头',async()=>{
     const project=cloneTemplate('commerce'),options=normalizeMockApiOptions({routeOverrides:[{method:'POST',path:'/api/payments',latencyMinMs:0,latencyMaxMs:0,failureRate:100,failureStatus:429,failureMessage:'支付渠道限流'}]}),runtime=executeHandlers(mockApiHandlers(project,generateProject(project).data),options),postPayment=runtime.handlers.find(handler=>handler.method==='post'&&handler.path.endsWith('/api/payments'))!,postUser=runtime.handlers.find(handler=>handler.method==='post'&&handler.path.endsWith('/api/users'))!

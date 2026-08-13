@@ -30,6 +30,7 @@ export function mockApiRoutes(project:ProjectSchema,options?:Partial<MockApiOpti
     detail:`/api/${table.name}/:id`,
     batch:`/api/${table.name}/_batch`,
     methods:['GET','POST','PATCH','DELETE'],
+    batchMethods:['POST','PATCH','DELETE'],
     filters:table.fields.map(field=>field.name),
     behavior,
   }))
@@ -309,7 +310,7 @@ export const handlers = resources.flatMap(resource => [
   })),
 ])
 
-const batchHandlers = resources.map(resource =>
+const batchHandlers = resources.flatMap(resource => [
   http.post('*/api/' + resource.resource + '/_batch', ({ request }) => withNetwork(request, async () => {
     const payload = await requestJson(request)
     const values = Array.isArray(payload) ? payload : asRecord(payload)?.items
@@ -331,7 +332,74 @@ const batchHandlers = resources.map(resource =>
     }
     return HttpResponse.json(wrapped(created, { created: created.length }), { status: 201 })
   })),
-)
+  http.patch('*/api/' + resource.resource + '/_batch', ({ request }) => withNetwork(request, async () => {
+    const payload = await requestJson(request), values = Array.isArray(payload) ? payload : asRecord(payload)?.items
+    if (!Array.isArray(values) || values.length === 0) return errorResponse(400, 'Non-empty items array required')
+    if (values.length > 1000) return errorResponse(400, 'Batch limit is 1000 records')
+    const snapshot = structuredClone(db[resource.resource]), updated: MockRecord[] = [], seen = new Set<string>()
+    for (let index = 0; index < values.length; index++) {
+      const input = asRecord(values[index]), changes = asRecord(input?.changes), id = input?.id
+      if (!input || id == null || !changes || Object.keys(input).some(field => !['id', 'changes'].includes(field))) {
+        db[resource.resource] = snapshot
+        return errorResponse(400, 'Each item requires only id and changes', { index })
+      }
+      const identity = String(id)
+      if (seen.has(identity)) {
+        db[resource.resource] = snapshot
+        return errorResponse(409, 'Duplicate id in batch', { index })
+      }
+      seen.add(identity)
+      const rowIndex = db[resource.resource].findIndex(item => sameId(item[resource.key], id))
+      if (rowIndex < 0) {
+        db[resource.resource] = snapshot
+        return errorResponse(404, 'Record not found', { index })
+      }
+      const body = allowedBody(changes, resource), candidate = { ...db[resource.resource][rowIndex], ...body, [resource.key]: db[resource.resource][rowIndex][resource.key] }
+      const invalid = invalidReference(candidate, resource)
+      if (invalid) {
+        db[resource.resource] = snapshot
+        return errorResponse(422, 'Foreign key not found: ' + invalid.childField + ' -> ' + invalid.parent + '.' + invalid.parentField, { index })
+      }
+      db[resource.resource][rowIndex] = candidate
+      updated.push(candidate)
+    }
+    return HttpResponse.json(wrapped(updated, { updated: updated.length }))
+  })),
+  http.delete('*/api/' + resource.resource + '/_batch', ({ request }) => withNetwork(request, async () => {
+    const payload = await requestJson(request), ids = Array.isArray(payload) ? payload : asRecord(payload)?.ids
+    if (!Array.isArray(ids) || ids.length === 0) return errorResponse(400, 'Non-empty ids array required')
+    if (ids.length > 1000) return errorResponse(400, 'Batch limit is 1000 records')
+    const databaseSnapshot = structuredClone(db), targets: MockRecord[] = [], seen = new Set<string>()
+    for (let index = 0; index < ids.length; index++) {
+      const id = ids[index]
+      if (!['string', 'number'].includes(typeof id)) return errorResponse(400, 'Each id must be a string or number', { index })
+      const identity = String(id)
+      if (seen.has(identity)) return errorResponse(409, 'Duplicate id in batch', { index })
+      seen.add(identity)
+      const row = db[resource.resource].find(item => sameId(item[resource.key], id))
+      if (!row) return errorResponse(404, 'Record not found', { index })
+      if (mockApiOptions.deletePolicy === 'restrict') {
+        const dependents = dependentRows(resource, row)
+        if (dependents.length) return errorResponse(409, 'Referenced by ' + dependents.length + ' child record(s)', { index })
+      }
+      targets.push(structuredClone(row))
+    }
+    const beforeRows = Object.values(db).reduce((sum, rows) => sum + rows.length, 0)
+    try {
+      for (const target of targets) {
+        const current = db[resource.resource].find(item => sameId(item[resource.key], target[resource.key]))
+        if (!current) continue
+        if (mockApiOptions.deletePolicy === 'cascade') cascadeDependents(resource, current)
+        db[resource.resource] = db[resource.resource].filter(item => item !== current)
+      }
+    } catch (error) {
+      for (const definition of resources) db[definition.resource] = databaseSnapshot[definition.resource]
+      return errorResponse(500, error instanceof Error ? error.message : 'Batch delete failed')
+    }
+    const afterRows = Object.values(db).reduce((sum, rows) => sum + rows.length, 0)
+    return HttpResponse.json(wrapped(targets, { deleted: targets.length, cascaded: Math.max(0, beforeRows - afterRows - targets.length) }))
+  })),
+])
 
 const relationHandlers = mockApiOptions.nestedRoutes ? relations.map(relation =>
   http.get('*' + relation.path, ({ params, request }) => withNetwork(request, () => {
@@ -389,8 +457,8 @@ const controlHandlers = [
   }),
 ]
 
-handlers.unshift(...controlHandlers)
-handlers.push(...batchHandlers, ...relationHandlers)
+handlers.unshift(...controlHandlers, ...batchHandlers)
+handlers.push(...relationHandlers)
 `
 }
 
@@ -422,7 +490,7 @@ npm run typecheck
 npm test
 \`\`\`
 
-包内测试会真实启动 MSW Node server，验证分页、CRUD、原子批量写入、控制接口、复位、外键、删除策略和嵌套路由。
+包内测试会真实启动 MSW Node server，验证分页、CRUD、原子批量增改删、控制接口、复位、外键、删除策略和嵌套路由。
 
 ## 接入已有项目
 
@@ -455,6 +523,8 @@ ${routes.map(route=>`- \`GET ${route.list}?_page=1&_limit=20&_sort=${route.prima
 - \`GET ${route.detail}\`
 - \`POST ${route.list}\`
 - \`POST ${route.batch}\`（1–1,000 条，失败整批回滚）
+- \`PATCH ${route.batch}\`（\`[{ id, changes }]\`，失败整批回滚）
+- \`DELETE ${route.batch}\`（ID 数组或 \`{ ids: [] }\`，遵循引用删除策略）
 - \`PATCH ${route.detail}\`
 - \`DELETE ${route.detail}\``).join('\n')}
 
@@ -473,7 +543,7 @@ ${routes.map(route=>`- \`GET ${route.list}?_page=1&_limit=20&_sort=${route.prima
 
 ${nested.length?`### 父子嵌套查询\n\n${nested.map(route=>`- \`GET ${route.path}\`（${route.parent} → ${route.child}.${route.foreignKey}）`).join('\n')}\n`:''}
 
-列表响应包含 \`X-Total-Count\`，业务响应包含稳定请求编号 \`X-Mock-Request-Id\` 和实际等待毫秒数 \`X-Mock-Latency\`，注入失败额外包含 \`X-Mock-Injected-Failure: true\`；单页最多 1,000 条。POST 自动补充缺失主键并拒绝重复主键，PATCH 不允许修改主键，请求中不属于当前 Schema 的字段会被丢弃。开启外键校验时，POST/PATCH 的悬空外键返回 422。批量接口接受 JSON 数组或 \`{ items: [] }\`，任一条格式、主键或外键失败都会恢复该表到请求前状态，并在错误中返回从 0 开始的 \`index\`。
+列表响应包含 \`X-Total-Count\`，业务响应包含稳定请求编号 \`X-Mock-Request-Id\` 和实际等待毫秒数 \`X-Mock-Latency\`，注入失败额外包含 \`X-Mock-Injected-Failure: true\`；单页最多 1,000 条。POST 自动补充缺失主键并拒绝重复主键，PATCH 不允许修改主键，请求中不属于当前 Schema 的字段会被丢弃。开启外键校验时，POST/PATCH 的悬空外键返回 422。批量新增接受 JSON 数组或 \`{ items: [] }\`，批量修改接受 \`[{ id, changes }]\`，批量删除接受 ID 数组或 \`{ ids: [] }\`；单批最多 1,000 条。任一条格式、主键、外键或引用策略失败都会整批不落库，并在错误中返回从 0 开始的 \`index\`。级联批量删除会在 \`meta.cascaded\` 返回额外清理的后代数量。
 
 ## 文件
 
@@ -481,7 +551,7 @@ ${nested.length?`### 父子嵌套查询\n\n${nested.map(route=>`- \`GET ${route.
 - \`package.json\` / \`tsconfig.json\` / \`vitest.config.ts\`：独立可运行的测试工程配置，依赖使用精确版本。
 - \`handlers.test.ts\`：真实请求验证分页、CRUD、批量回滚、脱敏追踪、场景快照、控制接口、复位与关系策略。
 - \`config.ts\`：种子、延迟、失败率、失败状态码和响应格式。
-- \`handlers.ts\`：内存 CRUD、分页、搜索、字段筛选、排序与网络场景实现。
+- \`handlers.ts\`：内存 CRUD、原子批量增改删、分页、搜索、字段筛选、排序与网络场景实现。
 - \`browser.ts\` / \`server.ts\`：浏览器和 Node 测试入口。
 - \`openapi.json\`：接口契约，可导入 Apifox、Postman 或 Swagger UI。
 - \`routes.json\`：机器可读路由与网络行为清单。
@@ -489,7 +559,7 @@ ${nested.length?`### 父子嵌套查询\n\n${nested.map(route=>`- \`GET ${route.
 }
 
 export function mockApiSmokeTests(project:ProjectSchema){
-  const first=project.tables[0],firstPrimary=primary(first),relations=relationSpecs(project),relation=relations[0]
+  const first=project.tables[0],firstPrimary=primary(first),firstMutable=first.fields.find(field=>field.name!==firstPrimary.name)??firstPrimary,relations=relationSpecs(project),relation=relations[0]
   const [nestedBefore,nestedAfter]=relation?.path.split(':id')??['','']
   return `import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { mockApiOptions } from './config'
@@ -558,7 +628,18 @@ describe(${JSON.stringify(project.name+' Mock API')}, () => {
     const table = ${JSON.stringify(first.name)}, initialCount = db[table].length
     const created = await fetch(origin + ${JSON.stringify(`/api/${first.name}/_batch`)}, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify([{}, {}]) })
     expect(created.status).toBe(201)
-    expect(unwrap(await created.json())).toHaveLength(2)
+    const createdRows = unwrap(await created.json()) as Record<string, unknown>[]
+    expect(createdRows).toHaveLength(2)
+    const createdIds = createdRows.map(row => row[${JSON.stringify(firstPrimary.name)}])
+    const patched = await fetch(origin + ${JSON.stringify(`/api/${first.name}/_batch`)}, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(createdIds.map((id, index) => ({ id, changes: { ${JSON.stringify(firstMutable.name)}: 'batch-' + index } }))) })
+    expect(patched.status).toBe(200)
+    expect((unwrap(await patched.json()) as Record<string, unknown>[]).map(row => row[${JSON.stringify(firstMutable.name)}])).toEqual(['batch-0', 'batch-1'])
+    const rejectedPatch = await fetch(origin + ${JSON.stringify(`/api/${first.name}/_batch`)}, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify([{ id: createdIds[0], changes: { ${JSON.stringify(firstMutable.name)}: 'must-rollback' } }, { id: '__missing__', changes: {} }]) })
+    expect(rejectedPatch.status).toBe(404)
+    expect(db[table].find(row => String(row[${JSON.stringify(firstPrimary.name)}]) === String(createdIds[0]))?.[${JSON.stringify(firstMutable.name)}]).toBe('batch-0')
+    const removed = await fetch(origin + ${JSON.stringify(`/api/${first.name}/_batch`)}, { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids: createdIds }) })
+    expect(removed.status).toBe(200)
+    expect(db[table]).toHaveLength(initialCount)
     const beforeFailure = db[table].length, existingId = db[table][0][${JSON.stringify(firstPrimary.name)}]
     const failed = await fetch(origin + ${JSON.stringify(`/api/${first.name}/_batch`)}, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify([{}, { ${JSON.stringify(firstPrimary.name)}: existingId }]) })
     expect(failed.status).toBe(409)
