@@ -1,5 +1,5 @@
 import type { ProjectSchema } from '../types'
-import { sortTables } from './engine'
+import { sortTables } from './modeling'
 
 export interface DiagnosticIssue {
   id: string

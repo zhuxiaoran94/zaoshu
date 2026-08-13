@@ -1,47 +1,6 @@
 import { fakerZH_CN as faker } from '@faker-js/faker'
-import type { DataType, FieldRule, GeneratorDefinition } from '../types'
-
-const defs: Array<[string, string, string, DataType, string?]> = [
-  ['autoId','自增 ID','标识','number','10001'], ['uuid','UUID','标识','string'], ['ulid','ULID','标识','string'], ['snowflake','雪花 ID','标识','string'],
-  ['traceId','Trace ID','标识','string'], ['spanId','Span ID','标识','string'], ['sessionId','Session ID','标识','string'], ['orderNo','订单号','标识','string'],
-  ['transactionNo','交易流水号','标识','string'], ['accountNo','账户号','标识','string'], ['sku','SKU 编码','标识','string'], ['productCode','商品编码','标识','string'],
-  ['chineseName','中文姓名','身份','string'], ['englishName','英文姓名','身份','string'], ['firstName','名','身份','string'], ['lastName','姓','身份','string'],
-  ['nickname','昵称','身份','string'], ['username','用户名','身份','string'], ['gender','性别','身份','string'], ['age','年龄','身份','number'],
-  ['birthday','生日','身份','date'], ['zodiac','生肖','身份','string'], ['constellation','星座','身份','string'], ['phone','手机号','身份','string'],
-  ['telephone','座机号','身份','string'], ['email','邮箱','身份','string'], ['idCard','虚构身份证','身份','string'], ['passport','护照格式','身份','string'],
-  ['driverLicense','驾驶证格式','身份','string'], ['avatar','头像 URL','身份','string'], ['bio','个人简介','身份','string'], ['job','职业','身份','string'],
-  ['company','公司','身份','string'], ['department','部门','身份','string'], ['position','职位','身份','string'], ['memberLevel','会员等级','身份','string'],
-  ['country','国家','地址','string'], ['province','省份','地址','string'], ['city','城市','地址','string'], ['district','区县','地址','string'],
-  ['address','详细地址','地址','string'], ['postcode','邮编','地址','string'], ['latitude','纬度','地址','number'], ['longitude','经度','地址','number'],
-  ['timezone','时区','地址','string'], ['locale','Locale','地址','string'], ['language','语言','地址','string'], ['ipv4','IPv4','网络','string'],
-  ['ipv6','IPv6','网络','string'], ['mac','MAC 地址','网络','string'], ['url','URL','网络','string'], ['domain','域名','网络','string'],
-  ['path','请求路径','网络','string'], ['query','Query 参数','网络','string'], ['httpMethod','HTTP 方法','网络','string'], ['httpStatus','HTTP 状态码','网络','number'],
-  ['contentType','Content-Type','网络','string'], ['userAgent','User-Agent','网络','string'], ['os','操作系统','网络','string'], ['browser','浏览器','网络','string'],
-  ['device','设备型号','网络','string'], ['appVersion','应用版本','网络','string'], ['gitCommit','Git Commit','网络','string'], ['errorCode','错误码','网络','string'],
-  ['integer','整数','数字','number'], ['positiveInt','正整数','数字','number'], ['negativeInt','负整数','数字','number'], ['float','小数','数字','number'],
-  ['amount','金额','金融','number'], ['discount','折扣','金融','number'], ['taxRate','税率','金融','number'], ['fee','手续费','金融','number'],
-  ['exchangeRate','汇率','金融','number'], ['percentage','百分比','数字','number'], ['probability','概率','数字','number'], ['rating','评分','数字','number'],
-  ['bankCard','银行卡格式','金融','string'], ['stockCode','股票代码','金融','string'], ['fundCode','基金代码','金融','string'], ['currency','币种','金融','string'],
-  ['bank','银行','金融','string'], ['riskLevel','风险等级','金融','string'], ['transactionType','交易类型','金融','string'], ['transactionStatus','交易状态','金融','string'],
-  ['date','日期','时间','date'], ['time','时间','时间','string'], ['dateTime','日期时间','时间','date'], ['timestamp','时间戳','时间','number'],
-  ['pastDate','过去时间','时间','date'], ['futureDate','未来时间','时间','date'], ['workday','工作日','时间','date'], ['weekend','周末','时间','date'],
-  ['monthStart','月初','时间','date'], ['monthEnd','月末','时间','date'], ['quarter','季度','时间','string'], ['fiscalYear','财务年度','时间','string'],
-  ['chineseWord','中文词语','文本','string'], ['chineseSentence','中文句子','文本','string'], ['chineseParagraph','中文段落','文本','string'], ['englishWord','英文单词','文本','string'],
-  ['englishSentence','英文句子','文本','string'], ['lorem','Lorem','文本','string'], ['productName','商品名称','业务','string'], ['newsTitle','新闻标题','文本','string'],
-  ['comment','用户评论','文本','string'], ['logMessage','日志消息','文本','string'], ['randomString','随机字符串','文本','string'], ['numericString','数字串','文本','string'],
-  ['alphaNumeric','字母数字串','文本','string'], ['emoji','Emoji','文本','string'], ['specialChars','特殊字符','文本','string'], ['boolean','布尔值','基础','boolean'],
-  ['userStatus','用户状态','枚举','string'], ['accountType','账号类型','枚举','string'], ['productCategory','商品分类','枚举','string'], ['brand','品牌','枚举','string'],
-  ['specification','商品规格','枚举','string'], ['unit','单位','枚举','string'], ['orderStatus','订单状态','枚举','string'], ['paymentMethod','支付方式','枚举','string'],
-  ['logisticsStatus','物流状态','枚举','string'], ['gameClass','游戏职业','游戏','string'], ['equipmentQuality','装备品质','游戏','string'], ['questStatus','任务状态','游戏','string'],
-  ['approvalStatus','审批状态','枚举','string'], ['priority','优先级','枚举','string'], ['serverName','游戏服务器','游戏','string'], ['itemName','游戏道具','游戏','string'],
-  ['guildName','公会名称','游戏','string'], ['playerLevel','玩家等级','游戏','number'], ['experience','经验值','游戏','number'], ['gold','金币','游戏','number'],
-  ['articleTitle','文章标题','社区','string'], ['tag','标签','社区','string'], ['reportReason','举报原因','社区','string'], ['trackingNo','运单号','物流','string'],
-  ['packageWeight','包裹重量','物流','number'], ['courierName','配送员','物流','string'], ['fileName','文件名','测试','string'], ['mimeType','文件类型','测试','string'],
-  ['fileSize','文件大小','测试','number'], ['treePath','树节点路径','测试','string'], ['batchStatus','批次状态','测试','string'], ['customEnum','自定义枚举','自定义','string'],
-  ['fixed','固定值','自定义','string'], ['sequence','序列值','自定义','number'], ['template','格式模板','自定义','string'], ['dataPool','自定义数据池','自定义','string'],
-]
-
-export const GENERATORS: GeneratorDefinition[] = defs.map(([key,name,category,dataType,sample]) => ({ key,name,category,dataType,sample }))
+import type { FieldRule } from '../types'
+export { GENERATORS } from './generatorCatalog'
 
 const pick = <T>(items: T[], index?: number): T => items[(index ?? faker.number.int({ min: 0, max: items.length - 1 })) % items.length]
 const pad = (n: number, width = 6) => String(n).padStart(width, '0')

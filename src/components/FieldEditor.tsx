@@ -1,5 +1,5 @@
 import { Copy, Trash2, ArrowDown, ArrowUp, Plus, WandSparkles } from './Icons'
-import { GENERATORS } from '../data/generators'
+import { GENERATORS } from '../data/generatorCatalog'
 import { useAppStore } from '../store'
 import type { ConditionOperator, DataType, FieldCondition } from '../types'
 
