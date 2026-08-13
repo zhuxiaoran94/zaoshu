@@ -15,3 +15,96 @@
 @media (prefers-reduced-motion: reduce) {
   .run-stats.running svg { animation: none; }
 }
+
+.form-error,
+.dialog-message {
+  margin: 8px 0;
+  border-radius: 7px;
+  padding: 9px 11px;
+  font-size: 10px;
+}
+
+.form-error,
+.dialog-message.error {
+  background: #fff0e9;
+  border: 1px solid #f7c2ac;
+  color: #a63e19;
+}
+
+.dialog-message {
+  margin: 0 18px 14px;
+}
+
+.dialog-message.success {
+  background: #e8f7f4;
+  border: 1px solid #b8e1dc;
+  color: #08766e;
+}
+
+.project-actions {
+  display: grid;
+  gap: 8px;
+  padding: 18px;
+}
+
+.project-actions article {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: white;
+  padding: 12px;
+}
+
+.project-actions article > svg {
+  width: 18px;
+  color: var(--blue);
+}
+
+.project-actions article > div {
+  min-width: 0;
+}
+
+.project-actions strong {
+  display: block;
+  font-size: 11px;
+}
+
+.project-actions p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.project-actions article.danger-zone {
+  border-color: #f3c8b8;
+  background: #fff9f6;
+}
+
+.project-actions article.danger-zone > svg {
+  color: var(--orange);
+}
+
+.danger-button {
+  border-color: #f3a88b;
+  background: #fff0e9;
+  color: #a63e19;
+}
+
+.privacy-note {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+@media (max-width: 680px) {
+  .project-actions article {
+    grid-template-columns: 28px 1fr;
+  }
+
+  .project-actions article .button {
+    grid-column: 1 / -1;
+  }
+}

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { cloneTemplate } from '../data/templates'
 import { generatePairwise, generateProject, sortTables } from './engine'
-import { toCSV, toSQL } from './exporters'
+import { neutralizeSpreadsheetFormula, toCSV, toSQL } from './exporters'
+import { parseProjectFile, serializeProject } from './projectConfig'
 
 describe('Mock造数引擎',()=>{
   it('相同随机种子生成一致结果',()=>{
@@ -39,5 +40,21 @@ describe('Mock造数引擎',()=>{
   it('循环依赖会被拒绝',()=>{
     const project=cloneTemplate('users');project.tables[0].fields[0].ref={tableId:'addresses',field:'id'}
     expect(()=>sortTables(project.tables)).toThrow(/循环依赖/)
+  })
+  it('项目配置可以安全导出与恢复',()=>{
+    const project=cloneTemplate('finance')
+    expect(parseProjectFile(serializeProject(project))).toEqual(project)
+    expect(()=>parseProjectFile(JSON.stringify({fileType:'other',fileVersion:1,project}))).toThrow(/不是 Mock造数工具/)
+  })
+  it('拒绝危险或过大的项目配置',()=>{
+    const project=cloneTemplate('users')
+    project.tables[0].fields[0].name='id; DROP TABLE users'
+    expect(()=>parseProjectFile(serializeProject(project))).toThrow(/字段名/)
+    const tooLarge='x'.repeat(1024*1024+1)
+    expect(()=>parseProjectFile(tooLarge)).toThrow(/1 MB/)
+  })
+  it('CSV 与 Excel 文本会阻断公式注入',()=>{
+    expect(neutralizeSpreadsheetFormula('=HYPERLINK("https://evil.test")')).toBe(`'=HYPERLINK("https://evil.test")`)
+    expect(toCSV([{value:'@SUM(1,2)'}])).toContain(`'@SUM(1,2)`)
   })
 })
