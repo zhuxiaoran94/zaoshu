@@ -432,3 +432,48 @@
   .condition-no-value { grid-column: 2 / 4; }
   .condition-rule .icon-button { grid-column: 4; grid-row: 1; }
 }
+
+.pairwise-lab > header {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.pair-actions { display: flex; gap: 5px; }
+.pair-actions .button { height: 30px; padding: 0 9px; font-size: 9px; }
+.pair-actions .button svg { width: 12px; }
+.lab-metrics.pair-metrics { grid-template-columns: repeat(4, 1fr); }
+.pair-metrics .complete { border-color: #95cec7; background: #e8f7f4; }
+.pair-metrics .complete strong { color: var(--teal); }
+
+.pair-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 13px 0 7px;
+}
+
+.pair-section-title > div { display: flex; flex-direction: column; }
+.pair-section-title strong { font-size: 10px; }
+.pair-section-title span { margin-top: 2px; color: var(--muted); font-size: 8px; }
+.pair-section-title .button { height: 29px; padding: 0 9px; font-size: 9px; }
+
+.pairwise-lab .dimension-list { margin-top: 0; }
+.pairwise-lab .dimension-list label { position: relative; padding-right: 27px; }
+.pairwise-lab .dimension-list label > .icon-button { position: absolute; top: 50%; right: 2px; width: 23px; height: 23px; transform: translateY(-50%); }
+.pairwise-lab .dimension-list label > .icon-button:disabled { opacity: .25; }
+
+.pair-rules { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-bottom: 9px; }
+.pair-rules label { overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: white; }
+.pair-rules label > span { display: flex; flex-direction: column; padding: 8px 9px; background: #edf3f5; }
+.pair-rules strong { font-size: 9px; }
+.pair-rules small { margin-top: 2px; color: var(--muted); font-size: 8px; }
+.pair-rules textarea { width: 100%; min-height: 55px; resize: vertical; border: 0; padding: 8px; color: var(--ink); font: 9px/1.5 ui-monospace, monospace; outline: 0; }
+.pairwise-error { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; border: 1px solid #f3c8b8; border-radius: 7px; background: #fff7f2; padding: 8px; color: #a63e19; font-size: 9px; }
+.pairwise-error svg { width: 14px; flex: none; }
+
+@media (max-width: 680px) {
+  .lab-metrics.pair-metrics,
+  .pair-rules { grid-template-columns: 1fr 1fr; }
+  .pairwise-lab > header { align-items: flex-start; }
+  .pair-actions { flex-wrap: wrap; justify-content: flex-end; }
+}

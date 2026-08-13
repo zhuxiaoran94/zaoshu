@@ -7,6 +7,7 @@ const clean=(row:DataRow)=>Object.fromEntries(Object.entries(row).filter(([k])=>
 export const neutralizeSpreadsheetFormula = (value:string) => /^[=+\-@\t\r]/.test(value) ? `'${value}` : value
 const csvCell=(v:unknown,delimiter=',')=>{const raw=v==null?'':typeof v==='object'?JSON.stringify(v):String(v);const s=neutralizeSpreadsheetFormula(raw);return s.includes(delimiter)||/["\n]/.test(s)?`"${s.replaceAll('"','""')}"`:s}
 export function toCSV(rows:DataRow[],delimiter=','){if(!rows.length)return '';const keys=[...new Set(rows.flatMap(r=>Object.keys(clean(r))))];return [keys.join(delimiter),...rows.map(r=>keys.map(k=>csvCell(r[k],delimiter)).join(delimiter))].join('\n')}
+export function exportRows(rows:DataRow[],format:'json'|'csv'|'postman',name='pairwise-cases') { const base=safeName(name);if(format==='csv')download(new Blob([toCSV(rows)],{type:'text/csv;charset=utf-8'}),`${base}.csv`);else download(new Blob([JSON.stringify(rows,null,2)],{type:'application/json'}),`${base}_${format==='postman'?'postman_':''}data.json`) }
 const sqlValue=(v:unknown,dialect:string)=>{if(v==null)return'NULL';if(typeof v==='number')return String(v);if(typeof v==='boolean')return dialect==='postgres'?String(v):v?'1':'0';return `'${String(v).replaceAll("'","''")}'`}
 export function toSQL(project:ProjectSchema,data:GeneratedData,dialect:'mysql'|'postgres'|'sqlite') {
   const quote=dialect==='mysql'?'`':'"'; const identifier=(value:string)=>`${quote}${value.replaceAll(quote,quote+quote)}${quote}`; const lines=[dialect==='mysql'?'SET FOREIGN_KEY_CHECKS=0;':'BEGIN;']

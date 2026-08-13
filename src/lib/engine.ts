@@ -142,16 +142,63 @@ export function validate(project:ProjectSchema,data:GeneratedData):QualityCheck[
 }
 
 export interface PairwiseConfig { name:string; values:string[] }
-export function generatePairwise(dimensions:PairwiseConfig[]) {
-  if(!dimensions.length) return []
-  let rows:Record<string,string>[] = dimensions[0].values.map(v=>({[dimensions[0].name]:v}))
-  if(dimensions.length>1) rows=rows.flatMap(r=>dimensions[1].values.map(v=>({...r,[dimensions[1].name]:v})))
-  for(let d=2;d<dimensions.length;d++) {
-    const dim=dimensions[d]; const uncovered=new Set<string>()
-    for(let p=0;p<d;p++) for(const a of dimensions[p].values) for(const b of dim.values) uncovered.add(`${p}:${a}|${b}`)
-    rows.forEach(row=>{ let best=dim.values[0],score=-1; for(const v of dim.values){ let s=0; for(let p=0;p<d;p++) if(uncovered.has(`${p}:${row[dimensions[p].name]}|${v}`)) s++; if(s>score){score=s;best=v} } row[dim.name]=best; for(let p=0;p<d;p++) uncovered.delete(`${p}:${row[dimensions[p].name]}|${best}`) })
-    while(uncovered.size) { const row:Record<string,string>={}; for(let p=0;p<d;p++) row[dimensions[p].name]=dimensions[p].values[Math.floor(Math.random()*dimensions[p].values.length)]; row[dim.name]=dim.values[Math.floor(Math.random()*dim.values.length)]; let gain=0; for(let p=0;p<d;p++) if(uncovered.delete(`${p}:${row[dimensions[p].name]}|${row[dim.name]}`)) gain++; if(gain) rows.push(row as never) }
-  }
+export type PairwiseRule = Record<string,string>
+
+export function parsePairwiseRules(text:string,dimensions:PairwiseConfig[]):PairwiseRule[] {
+  if(text.length>20_000)throw new Error('组合规则文本不能超过 20,000 个字符')
+  const byName=new Map(dimensions.map(dimension=>[dimension.name,dimension.values]))
+  const lines=text.split(/\r?\n/).map(line=>line.trim()).filter(Boolean);if(lines.length>100)throw new Error('组合规则最多 100 行')
+  return lines.map((line,index)=>{
+    const rule:PairwiseRule={}
+    for(const token of line.split(/[,，]/).map(item=>item.trim()).filter(Boolean)){
+      const separator=token.indexOf('=');if(separator<1)throw new Error(`第 ${index+1} 行格式错误，请使用“维度=值”`)
+      const name=token.slice(0,separator).trim(),value=token.slice(separator+1).trim(),values=byName.get(name)
+      if(!values)throw new Error(`第 ${index+1} 行包含未知维度：${name}`)
+      if(!values.includes(value))throw new Error(`第 ${index+1} 行的 ${name} 不包含候选值：${value}`)
+      rule[name]=value
+    }
+    if(!Object.keys(rule).length)throw new Error(`第 ${index+1} 行没有有效条件`)
+    return rule
+  })
+}
+
+const pairKey=(a:number,av:string,b:number,bv:string)=>JSON.stringify([a,av,b,bv])
+const isExcluded=(row:PairwiseRule,exclusions:PairwiseRule[])=>exclusions.some(rule=>Object.keys(rule).length>0&&Object.entries(rule).every(([key,value])=>row[key]===value))
+const rowPairs=(dimensions:PairwiseConfig[],row:PairwiseRule)=>{const pairs:string[]=[];for(let i=0;i<dimensions.length;i++)for(let j=i+1;j<dimensions.length;j++)pairs.push(pairKey(i,row[dimensions[i].name],j,row[dimensions[j].name]));return pairs}
+const completeCombination=(partial:PairwiseRule,dimensions:PairwiseConfig[],exclusions:PairwiseRule[],uncovered?:Set<string>):PairwiseRule|null=>{
+  if(isExcluded(partial,exclusions))return null
+  const next=dimensions.findIndex(dimension=>partial[dimension.name]===undefined)
+  if(next<0)return partial
+  const dimension=dimensions[next]
+  const assigned=dimensions.map((candidate,index)=>({candidate,index})).filter(({candidate})=>partial[candidate.name]!==undefined)
+  const values=[...dimension.values].sort((a,b)=>{const score=(value:string)=>assigned.reduce((sum,{candidate,index})=>{const left=Math.min(index,next),right=Math.max(index,next);const leftValue=index<next?partial[candidate.name]:value,rightValue=index<next?value:partial[candidate.name];return sum+(uncovered?.has(pairKey(left,leftValue,right,rightValue))?1:0)},0);return score(b)-score(a)})
+  for(const value of values){const completed=completeCombination({...partial,[dimension.name]:value},dimensions,exclusions,uncovered);if(completed)return completed}
+  return null
+}
+
+const possiblePairs=(dimensions:PairwiseConfig[],exclusions:PairwiseRule[])=>{
+  const pairs=new Set<string>()
+  for(let i=0;i<dimensions.length;i++)for(let j=i+1;j<dimensions.length;j++)for(const a of dimensions[i].values)for(const b of dimensions[j].values){const partial={[dimensions[i].name]:a,[dimensions[j].name]:b};if(completeCombination(partial,dimensions,exclusions))pairs.add(pairKey(i,a,j,b))}
+  return pairs
+}
+
+export function analyzePairwiseCoverage(dimensions:PairwiseConfig[],rows:PairwiseRule[],exclusions:PairwiseRule[]=[]){
+  const required=possiblePairs(dimensions,exclusions);const covered=new Set(rows.flatMap(row=>rowPairs(dimensions,row)).filter(pair=>required.has(pair)));const missing=[...required].filter(pair=>!covered.has(pair)).map(pair=>{const [i,a,j,b]=JSON.parse(pair) as [number,string,number,string];return `${dimensions[i].name}=${a} × ${dimensions[j].name}=${b}`})
+  return{total:required.size,covered:covered.size,missing,percentage:required.size?Math.round(covered.size/required.size*100):100}
+}
+
+export function generatePairwise(dimensions:PairwiseConfig[],options:{exclusions?:PairwiseRule[];forced?:PairwiseRule[]}={}) {
+  if(!dimensions.length)return []
+  if(dimensions.length<2||dimensions.length>8)throw new Error('Pairwise 需要 2–8 个维度')
+  if(new Set(dimensions.map(dimension=>dimension.name)).size!==dimensions.length)throw new Error('Pairwise 维度名称不能重复')
+  if(dimensions.some(dimension=>!dimension.name||!dimension.values.length))throw new Error('每个 Pairwise 维度都需要名称和候选值')
+  if(dimensions.some(dimension=>dimension.name.length>80||dimension.values.length>20||dimension.values.some(value=>value.length>200)))throw new Error('维度名最多 80 字符，每个维度最多 20 个候选值，单值最多 200 字符')
+  const dimensionsByName=new Map(dimensions.map(dimension=>[dimension.name,dimension.values]));for(const rule of [...options.exclusions||[],...options.forced||[]])for(const [name,value] of Object.entries(rule)){if(!dimensionsByName.has(name))throw new Error(`组合规则包含未知维度：${name}`);if(!dimensionsByName.get(name)!.includes(value))throw new Error(`${name} 不包含候选值：${value}`)}
+  const exclusions=options.exclusions||[],uncovered=possiblePairs(dimensions,exclusions),rows:PairwiseRule[]=[]
+  const append=(candidate:PairwiseRule|null)=>{if(!candidate)return;const signature=JSON.stringify(candidate);if(rows.some(row=>JSON.stringify(row)===signature))return;rows.push(candidate);rowPairs(dimensions,candidate).forEach(pair=>uncovered.delete(pair))}
+  for(const forced of options.forced||[]){const candidate=completeCombination(forced,dimensions,exclusions,uncovered);if(!candidate)throw new Error(`强制组合与排除规则冲突：${Object.entries(forced).map(([key,value])=>`${key}=${value}`).join(', ')}`);append(candidate)}
+  while(uncovered.size){const [key]=uncovered;const [i,a,j,b]=JSON.parse(key) as [number,string,number,string];const candidate=completeCombination({[dimensions[i].name]:a,[dimensions[j].name]:b},dimensions,exclusions,uncovered);if(!candidate){uncovered.delete(key);continue}append(candidate)}
+  if(!rows.length){const candidate=completeCombination({},dimensions,exclusions,uncovered);if(candidate)rows.push(candidate)}
   return rows
 }
 

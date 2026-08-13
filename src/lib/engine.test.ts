@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { cloneTemplate } from '../data/templates'
-import { generatePairwise, generateProject, matchesFieldCondition, sortTables } from './engine'
+import { analyzePairwiseCoverage, generatePairwise, generateProject, matchesFieldCondition, parsePairwiseRules, sortTables } from './engine'
 import { neutralizeSpreadsheetFormula, toCSV, toSQL } from './exporters'
 import { parseProjectFile, serializeProject } from './projectConfig'
 import type { FieldRule } from '../types'
@@ -30,6 +30,22 @@ describe('Mock造数引擎',()=>{
     const dims=[{name:'A',values:['1','2','3']},{name:'B',values:['x','y']},{name:'C',values:['on','off']}]
     const rows=generatePairwise(dims)
     for(let i=0;i<dims.length;i++)for(let j=i+1;j<dims.length;j++)for(const a of dims[i].values)for(const b of dims[j].values)expect(rows.some(r=>r[dims[i].name]===a&&r[dims[j].name]===b)).toBe(true)
+  })
+  it('Pairwise 支持排除和强制组合并保持 100% 合法参数对覆盖',()=>{
+    const dims=[{name:'设备',values:['iOS','Android','Web']},{name:'登录',values:['密码','微信']},{name:'状态',values:['正常','注销']},{name:'网络',values:['WiFi','弱网']}]
+    const exclusions=[{状态:'注销',登录:'微信'}],forced=[{设备:'iOS',网络:'弱网'}]
+    const rows=generatePairwise(dims,{exclusions,forced})
+    expect(rows.every(row=>!(row.状态==='注销'&&row.登录==='微信'))).toBe(true)
+    expect(rows.some(row=>row.设备==='iOS'&&row.网络==='弱网')).toBe(true)
+    expect(analyzePairwiseCoverage(dims,rows,exclusions)).toMatchObject({percentage:100,missing:[]})
+    expect(generatePairwise(dims,{exclusions,forced})).toEqual(rows)
+  })
+  it('Pairwise 文本规则会校验未知维度、未知值和强制冲突',()=>{
+    const dims=[{name:'A',values:['1','2']},{name:'B',values:['x','y']}]
+    expect(parsePairwiseRules('A=1, B=x',dims)).toEqual([{A:'1',B:'x'}])
+    expect(()=>parsePairwiseRules('C=1',dims)).toThrow(/未知维度/)
+    expect(()=>parsePairwiseRules('A=3',dims)).toThrow(/不包含候选值/)
+    expect(()=>generatePairwise(dims,{exclusions:[{A:'1'}],forced:[{A:'1',B:'x'}]})).toThrow(/冲突/)
   })
   it('SQL 和 CSV 可解析导出',()=>{
     const project=cloneTemplate('testing');project.tables.forEach(t=>t.count=2)
