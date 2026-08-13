@@ -20,6 +20,7 @@ export const mockApiControlRoutes=[
   {method:'POST',path:'/api/__mock/snapshots/:name/restore',description:'恢复指定场景快照的整库数据'},
   {method:'DELETE',path:'/api/__mock/snapshots/:name',description:'删除指定场景快照'},
   {method:'POST',path:'/api/__mock/transactions',description:'原子执行最多 100 步受限跨表数据事务'},
+  {method:'DELETE',path:'/api/__mock/idempotency',description:'清空本地幂等响应缓存，不改变业务数据'},
 ] as const
 
 export function mockApiRoutes(project:ProjectSchema,options?:Partial<MockApiOptions>){
@@ -83,11 +84,12 @@ type MockDatabase = Record<string, MockRecord[]>
 type FieldValidation = { name: string; type: string; required: boolean; nullable: boolean; values?: unknown[]; min?: number; max?: number; maxLength?: number }
 type ResourceDefinition = { resource: string; key: string; numericKey: boolean; fields: readonly string[]; uniqueFields: readonly string[]; validation: readonly FieldValidation[] }
 type ValidationIssue = { field: string; rule: string; message: string }
-export type MockRequestLog = { id: string; sequence: number; method: string; path: string; status: number; latencyMs: number; injectedFailure: boolean; routeOverride?: string }
+export type MockRequestLog = { id: string; sequence: number; method: string; path: string; status: number; latencyMs: number; injectedFailure: boolean; idempotentReplay: boolean; routeOverride?: string }
 export type MockSnapshotSummary = { name: string; revision: number; bytes: number; totalRows: number; rows: Record<string, number> }
 type StoredSnapshot = { summary: MockSnapshotSummary; database: MockDatabase }
 type SnapshotResult = { ok: true; snapshot: MockSnapshotSummary; replaced: boolean } | { ok: false; status: number; message: string }
 type ResolvedValue = { ok: true; value: unknown } | { ok: false; message: string }
+type CachedMockResponse = { status: number; statusText: string; headers: [string, string][]; body: string; bytes: number }
 
 const initialDb: MockDatabase = ${literal(initial)}
 export const db: MockDatabase = structuredClone(initialDb)
@@ -107,8 +109,13 @@ const SNAPSHOT_LIMIT = 10
 const SNAPSHOT_MAX_BYTES = 5 * 1024 * 1024
 const TRANSACTION_LIMIT = 100
 const TRANSACTION_MAX_BYTES = 1024 * 1024
+const IDEMPOTENCY_LIMIT = 100
+const IDEMPOTENCY_MAX_BYTES = 10 * 1024 * 1024
 const snapshotStore = new Map<string, StoredSnapshot>()
 let snapshotRevision = 0
+const idempotencyCache = new Map<string, { signature: string; response: CachedMockResponse }>()
+const idempotencyInFlight = new Map<string, { signature: string; promise: Promise<CachedMockResponse> }>()
+let idempotencyBytes = 0
 const sameId = (left: unknown, right: unknown) => String(left) === String(right)
 const pathMatches = (pattern: string, pathname: string) => {
   const expected = pattern.split('/'), actual = pathname.split('/')
@@ -138,6 +145,63 @@ const wrapped = (data: unknown, meta?: MockRecord): JsonBodyType => (
       ? { data }
       : { data, meta: meta ?? {} }
 ) as JsonBodyType
+
+const responseFromCache = (response: CachedMockResponse) => {
+  const headers = new Headers(response.headers)
+  headers.set('X-Mock-Idempotent-Replay', 'true')
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers })
+}
+const responseSnapshot = async (response: Response): Promise<CachedMockResponse> => {
+  const body = await response.clone().text(), bytes = new TextEncoder().encode(body).byteLength
+  const headers: [string, string][] = []
+  response.headers.forEach((value, key) => headers.push([key, value]))
+  return { status: response.status, statusText: response.statusText, headers, body, bytes }
+}
+const clearMockIdempotency = () => { const cleared = idempotencyCache.size; idempotencyCache.clear(); idempotencyInFlight.clear(); idempotencyBytes = 0; return cleared }
+const retainIdempotentResponse = (key: string, signature: string, response: CachedMockResponse) => {
+  if (response.bytes > IDEMPOTENCY_MAX_BYTES) return false
+  const existing = idempotencyCache.get(key)
+  if (existing) idempotencyBytes -= existing.response.bytes
+  idempotencyCache.delete(key)
+  idempotencyCache.set(key, { signature, response })
+  idempotencyBytes += response.bytes
+  while (idempotencyCache.size > IDEMPOTENCY_LIMIT || idempotencyBytes > IDEMPOTENCY_MAX_BYTES) {
+    const oldest = idempotencyCache.entries().next().value as [string, { response: CachedMockResponse }] | undefined
+    if (!oldest) break
+    idempotencyCache.delete(oldest[0]); idempotencyBytes -= oldest[1].response.bytes
+  }
+  return idempotencyCache.has(key)
+}
+const idempotencySignature = async (request: Request) => {
+  const body = await request.clone().text(), url = new URL(request.url), bytes = new TextEncoder().encode(request.method + '\\n' + url.pathname + url.search + '\\n' + body)
+  if (bytes.byteLength > 1024 * 1024) return null
+  if (globalThis.crypto?.subtle) {
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes)
+    return [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('')
+  }
+  let first = 2166136261, second = 2246822519
+  for (const value of bytes) { first = Math.imul(first ^ value, 16777619); second = Math.imul(second ^ value, 3266489917) }
+  return (first >>> 0).toString(16).padStart(8, '0') + (second >>> 0).toString(16).padStart(8, '0') + ':' + bytes.byteLength
+}
+const withIdempotency = async (request: Request, resolve: () => Response | Promise<Response>) => {
+  const key = request.headers.get('Idempotency-Key')
+  if (key === null) return resolve()
+  if (!/^[A-Za-z0-9._:-]{1,80}$/.test(key)) return errorResponse(400, 'Idempotency-Key must be 1-80 ASCII letters, numbers, ., _, : or -')
+  const signature = await idempotencySignature(request)
+  if (!signature) return errorResponse(413, 'Idempotent request exceeds 1 MiB')
+  const cached = idempotencyCache.get(key)
+  if (cached) return cached.signature === signature ? responseFromCache(cached.response) : errorResponse(409, 'Idempotency-Key was already used for a different request')
+  const running = idempotencyInFlight.get(key)
+  if (running) return running.signature === signature ? responseFromCache(await running.promise) : errorResponse(409, 'Idempotency-Key is in use by a different request')
+  let original: Response
+  const promise = (async () => { original = await resolve(); return responseSnapshot(original) })()
+  idempotencyInFlight.set(key, { signature, promise })
+  try {
+    const snapshot = await promise, stored = retainIdempotentResponse(key, signature, snapshot)
+    original!.headers.set('X-Mock-Idempotency-Stored', String(stored))
+    return original!
+  } finally { idempotencyInFlight.delete(key) }
+}
 
 const validateBody = (body: MockRecord, resource: ResourceDefinition, partial: boolean): ValidationIssue | null => {
   if (!mockApiOptions.validateSchema) return null
@@ -292,7 +356,7 @@ const withNetwork = async (request: Request, resolve: () => Response | Promise<R
     response.headers.set('X-Mock-Latency', String(latency))
     if (injectedFailure) response.headers.set('X-Mock-Injected-Failure', 'true')
     if (routeOverride) response.headers.set('X-Mock-Route-Override', routeOverride)
-    requestLog.push({ id: requestId, sequence, method: request.method, path: new URL(request.url).pathname, status: response.status, latencyMs: latency, injectedFailure, ...(routeOverride ? { routeOverride } : {}) })
+    requestLog.push({ id: requestId, sequence, method: request.method, path: new URL(request.url).pathname, status: response.status, latencyMs: latency, injectedFailure, idempotentReplay: response.headers.get('X-Mock-Idempotent-Replay') === 'true', ...(routeOverride ? { routeOverride } : {}) })
     if (requestLog.length > 500) requestLog.splice(0, requestLog.length - 500)
     return response
   }
@@ -310,6 +374,7 @@ export const resetMockData = () => {
   requestLog.length = 0
   requestSequence = 0
   clearMockSnapshots()
+  clearMockIdempotency()
 }
 
 export const handlers = resources.flatMap(resource => [
@@ -345,12 +410,12 @@ export const handlers = resources.flatMap(resource => [
     const row = db[resource.resource].find(item => sameId(item[resource.key], params.id))
     return row ? HttpResponse.json(wrapped(row)) : errorResponse(404, 'Not found')
   })),
-  http.post('*/api/' + resource.resource, ({ request }) => withNetwork(request, async () => {
+  http.post('*/api/' + resource.resource, ({ request }) => withNetwork(request, () => withIdempotency(request, async () => {
     const input = await jsonBody(request)
     if (!input) return errorResponse(400, 'JSON object required')
     const result = insertRecord(input, resource)
     return result.ok ? HttpResponse.json(wrapped(result.row), { status: 201 }) : errorResponse(result.status, result.message, result.details)
-  })),
+  }))),
   http.patch('*/api/' + resource.resource + '/:id', ({ params, request }) => withNetwork(request, async () => {
     const index = db[resource.resource].findIndex(item => sameId(item[resource.key], params.id))
     const input = await jsonBody(request)
@@ -385,7 +450,7 @@ export const handlers = resources.flatMap(resource => [
 ])
 
 const batchHandlers = resources.flatMap(resource => [
-  http.post('*/api/' + resource.resource + '/_batch', ({ request }) => withNetwork(request, async () => {
+  http.post('*/api/' + resource.resource + '/_batch', ({ request }) => withNetwork(request, () => withIdempotency(request, async () => {
     const payload = await requestJson(request)
     const values = Array.isArray(payload) ? payload : asRecord(payload)?.items
     if (!Array.isArray(values) || values.length === 0) return errorResponse(400, 'Non-empty items array required')
@@ -405,7 +470,7 @@ const batchHandlers = resources.flatMap(resource => [
       created.push(result.row)
     }
     return HttpResponse.json(wrapped(created, { created: created.length }), { status: 201 })
-  })),
+  }))),
   http.patch('*/api/' + resource.resource + '/_batch', ({ request }) => withNetwork(request, async () => {
     const payload = await requestJson(request), values = Array.isArray(payload) ? payload : asRecord(payload)?.items
     if (!Array.isArray(values) || values.length === 0) return errorResponse(400, 'Non-empty items array required')
@@ -502,6 +567,7 @@ const databaseSummary = () => ({
   tables: resources.length,
   requests: requestLog.length,
   snapshots: snapshotStore.size,
+  idempotency: idempotencyCache.size,
   rows: Object.fromEntries(resources.map(resource => [resource.resource, db[resource.resource].length])),
 })
 const controlHandlers = [
@@ -519,6 +585,7 @@ const controlHandlers = [
     requestLog.length = 0
     return HttpResponse.json(wrapped({ cleared: true }))
   }),
+  http.delete('*/api/__mock/idempotency', () => HttpResponse.json(wrapped({ cleared: clearMockIdempotency() }))),
   http.get('*/api/__mock/snapshots', () => {
     const rows = listMockSnapshots()
     return HttpResponse.json(wrapped(rows, { total: rows.length, limit: SNAPSHOT_LIMIT }))
@@ -539,7 +606,7 @@ const controlHandlers = [
     const deleted = deleteMockSnapshot(String(params.name ?? ''))
     return deleted ? HttpResponse.json(wrapped({ deleted: true })) : errorResponse(404, 'Snapshot not found')
   }),
-  http.post('*/api/__mock/transactions', async ({ request }) => {
+  http.post('*/api/__mock/transactions', ({ request }) => withIdempotency(request, async () => {
     const text = await request.text()
     if (new TextEncoder().encode(text).byteLength > TRANSACTION_MAX_BYTES) return errorResponse(413, 'Transaction exceeds 1 MiB')
     let payload: unknown
@@ -602,7 +669,7 @@ const controlHandlers = [
       results.push({ index, op: String(op), resource: resourceName, row: structuredClone(row), ...(typeof alias === 'string' ? { alias } : {}) })
     } } catch (error) { return rollback(500, error instanceof Error ? error.message : 'Transaction failed', activeIndex) }
     return HttpResponse.json(wrapped(results, { actions: results.length, aliases: [...aliases.keys()] }))
-  }),
+  })),
 ]
 
 handlers.unshift(...controlHandlers, ...batchHandlers)
@@ -688,18 +755,19 @@ ${routes.map(route=>`- \`GET ${route.list}?_page=1&_limit=20&_sort=${route.prima
 - \`POST /api/__mock/snapshots/:name/restore\`：将全部业务表恢复到快照状态。
 - \`DELETE /api/__mock/snapshots/:name\`：删除单个快照；\`DELETE /api/__mock/snapshots\` 清空全部快照。
 - \`POST /api/__mock/transactions\`：原子执行最多 100 步跨表 JSON 动作，支持 \`create/update/delete\` 与 \`$alias.field\` 引用。
+- \`DELETE /api/__mock/idempotency\`：只清空本地幂等响应缓存，不改变业务数据和请求轨迹。
 
-控制接口不经过延迟和失败注入，确保极端故障场景下仍能检查与复位；它们只存在于本地 MSW 内存环境，不是远程管理接口。事务只解释受限 JSON，不执行 JavaScript、不请求外部 URL，限制 100 步、1 MiB 和 10 层值嵌套；任一步失败恢复整个数据库。快照最多 10 个、每个最多 5 MiB，名称只允许 1–40 个中英文、数字、下划线或连字符；\`resetMockData()\` 会一并清除快照，保证测试隔离。请求轨迹最多保留 500 条，仅记录序号、方法、pathname、状态、延迟、故障标记和命中规则；不会记录查询参数、请求体、Authorization、Cookie 或其他 header。
+控制接口不经过延迟和失败注入，确保极端故障场景下仍能检查与复位；它们只存在于本地 MSW 内存环境，不是远程管理接口。事务只解释受限 JSON，不执行 JavaScript、不请求外部 URL，限制 100 步、1 MiB 和 10 层值嵌套；任一步失败恢复整个数据库。快照最多 10 个、每个最多 5 MiB，名称只允许 1–40 个中英文、数字、下划线或连字符；\`resetMockData()\` 会一并清除快照和幂等缓存，保证测试隔离。请求轨迹最多保留 500 条，仅记录序号、方法、pathname、状态、延迟、故障标记、幂等重放标记和命中规则；不会记录查询参数、请求体、Idempotency-Key、Authorization、Cookie 或其他 header。
 
 ${nested.length?`### 父子嵌套查询\n\n${nested.map(route=>`- \`GET ${route.path}\`（${route.parent} → ${route.child}.${route.foreignKey}）`).join('\n')}\n`:''}
 
-列表响应包含 \`X-Total-Count\`，业务响应包含稳定请求编号 \`X-Mock-Request-Id\` 和实际等待毫秒数 \`X-Mock-Latency\`，注入失败额外包含 \`X-Mock-Injected-Failure: true\`；单页最多 1,000 条。POST 自动补充缺失主键，主键或 Schema 中标记为 unique 的字段重复时返回 409 与 \`field/rule=unique\`。严格 Schema 校验关闭时，未知字段被兼容性丢弃；开启后，未知字段、类型、必填、空值、枚举、范围、长度和 PATCH 主键修改均返回 422，并附带 \`field\` 与 \`rule\`。开启外键校验时，POST/PATCH 的悬空外键返回 422。批量新增接受 JSON 数组或 \`{ items: [] }\`，批量修改接受 \`[{ id, changes }]\`，批量删除接受 ID 数组或 \`{ ids: [] }\`；单批最多 1,000 条。任一条格式、Schema、唯一、主键、外键或引用策略失败都会整批不落库，并在错误中返回从 0 开始的 \`index\`。级联批量删除会在 \`meta.cascaded\` 返回额外清理的后代数量。
+列表响应包含 \`X-Total-Count\`，业务响应包含稳定请求编号 \`X-Mock-Request-Id\` 和实际等待毫秒数 \`X-Mock-Latency\`，注入失败额外包含 \`X-Mock-Injected-Failure: true\`；单页最多 1,000 条。单条 POST、批量 POST 和跨表事务可发送 1–80 位 \`Idempotency-Key\`：同键、同方法、同路径和同请求体会原样重放且只写入一次，响应带 \`X-Mock-Idempotent-Replay: true\`；同键异参返回 409。缓存限制为最近 100 项和 10 MiB，请求签名输入限制 1 MiB；故障注入发生在幂等处理之前，因此模拟网络失败不会缓存，客户端可以按真实习惯重试。POST 自动补充缺失主键，主键或 Schema 中标记为 unique 的字段重复时返回 409 与 \`field/rule=unique\`。严格 Schema 校验关闭时，未知字段被兼容性丢弃；开启后，未知字段、类型、必填、空值、枚举、范围、长度和 PATCH 主键修改均返回 422，并附带 \`field\` 与 \`rule\`。开启外键校验时，POST/PATCH 的悬空外键返回 422。批量新增接受 JSON 数组或 \`{ items: [] }\`，批量修改接受 \`[{ id, changes }]\`，批量删除接受 ID 数组或 \`{ ids: [] }\`；单批最多 1,000 条。任一条格式、Schema、唯一、主键、外键或引用策略失败都会整批不落库，并在错误中返回从 0 开始的 \`index\`。级联批量删除会在 \`meta.cascaded\` 返回额外清理的后代数量。
 
 ## 文件
 
 - \`db.json\`：可直接读取或交给 json-server 等兼容工具。
 - \`package.json\` / \`tsconfig.json\` / \`vitest.config.ts\`：独立可运行的测试工程配置，依赖使用精确版本。
-- \`handlers.test.ts\`：真实请求验证分页、CRUD、批量回滚、跨表事务、脱敏追踪、场景快照、控制接口、复位与关系策略。
+- \`handlers.test.ts\`：真实请求验证分页、CRUD、幂等重试、批量回滚、跨表事务、脱敏追踪、场景快照、控制接口、复位与关系策略。
 - \`config.ts\`：种子、延迟、失败率、失败状态码、响应格式与 Schema/关系校验开关。
 - \`handlers.ts\`：内存 CRUD、原子批量增改删、分页、搜索、字段筛选、排序与网络场景实现。
 - \`browser.ts\` / \`server.ts\`：浏览器和 Node 测试入口。
@@ -743,6 +811,20 @@ describe(${JSON.stringify(project.name+' Mock API')}, () => {
     expect((unwrap(await patchedResponse.json()) as Record<string, unknown>)[${JSON.stringify(firstPrimary.name)}]).toBe(id)
     expect((await fetch(origin + ${JSON.stringify(`/api/${first.name}/`)} + id, { method: 'DELETE' })).status).toBe(200)
     resetMockData(); expect(db[${JSON.stringify(first.name)}].some(row => String(row[${JSON.stringify(firstPrimary.name)}]) === String(id))).toBe(false)
+  })
+
+  it('Idempotency-Key 防止创建请求在重试时重复写入', async () => {
+    const table = ${JSON.stringify(first.name)}, before = db[table].length
+    const request = () => fetch(origin + ${JSON.stringify(`/api/${first.name}`)}, { method: 'POST', headers: { 'content-type': 'application/json', 'Idempotency-Key': 'create-once-001' }, body: '{}' })
+    const first = await request(), replayed = await request()
+    expect(first.status).toBe(201); expect(replayed.status).toBe(201)
+    expect(first.headers.get('X-Mock-Idempotency-Stored')).toBe('true')
+    expect(replayed.headers.get('X-Mock-Idempotent-Replay')).toBe('true')
+    expect(await replayed.json()).toEqual(await first.json())
+    expect(db[table]).toHaveLength(before + 1)
+    const conflict = await fetch(origin + ${JSON.stringify(`/api/${first.name}`)}, { method: 'POST', headers: { 'content-type': 'application/json', 'Idempotency-Key': 'create-once-001' }, body: '{"different":true}' })
+    expect(conflict.status).toBe(409); expect(db[table]).toHaveLength(before + 1)
+    expect((await fetch(origin + '/api/__mock/idempotency', { method: 'DELETE' })).status).toBe(200)
   })
 
   it('严格模式按 Schema 拒绝非法字段并返回定位信息', async () => {
