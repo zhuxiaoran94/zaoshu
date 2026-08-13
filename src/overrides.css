@@ -271,6 +271,24 @@
 .relation-value-empty .button { height: 30px; padding: 0 9px; font-size: 9px; white-space: nowrap; }
 .relation-value-editor header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .relation-value-editor header button { border: 0; background: transparent; color: var(--orange); font-size: 9px; }
+
+.assertion-toolbar { border-bottom: 1px solid var(--line); background: #f7fbfb; }
+.assertion-toolbar summary { min-height: 38px; display: flex; align-items: center; justify-content: space-between; padding: 0 14px; cursor: pointer; list-style: none; color: var(--muted); font-size: 9px; }
+.assertion-toolbar summary::-webkit-details-marker { display: none; }
+.assertion-toolbar summary span { display: flex; align-items: center; gap: 6px; color: var(--ink); font-weight: 700; }
+.assertion-toolbar summary svg { width: 13px; color: var(--teal); }
+.assertion-toolbar summary b { min-width: 18px; padding: 2px 5px; border-radius: 10px; background: #dceff0; color: var(--blue); text-align: center; }
+.assertion-toolbar summary em { font-style: normal; }
+.assertion-body { padding: 0 14px 12px; }
+.assertion-body > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.assertion-body > header p { margin: 0; color: var(--muted); font-size: 9px; }
+.assertion-body > header .button { height: 28px; padding: 0 9px; font-size: 9px; white-space: nowrap; }
+.assertion-body article { display: grid; grid-template-columns: minmax(110px,.7fr) minmax(210px,1.4fr) minmax(150px,1fr) 125px 28px; gap: 7px; align-items: end; margin-top: 7px; padding: 9px; border: 1px solid #cfe0e2; border-radius: 8px; background: white; }
+.assertion-body article label { display: grid; gap: 3px; color: var(--muted); font-size: 8px; }
+.assertion-body article input,.assertion-body article select { width: 100%; height: 29px; border: 1px solid var(--line); border-radius: 6px; padding: 0 7px; background: white; color: var(--ink); font-size: 9px; }
+.assertion-empty { border: 1px dashed #c5d9dc; border-radius: 7px; padding: 9px; color: var(--muted); font-size: 9px; }
+.assertion-empty code { margin-left: 5px; color: var(--teal); }
+@media (max-width: 900px) { .assertion-body article { grid-template-columns: 1fr 1fr; }.assertion-expression { grid-column: 1 / -1; } }
 .cardinality-toolbar { display: flex; min-height: 40px; flex: none; align-items: center; gap: 10px; padding: 5px 14px; border-bottom: 1px solid var(--line); background: #e8f2f3; }
 .cardinality-toolbar label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 9px; }
 .cardinality-toolbar label:first-child span { color: var(--ink); font-weight: 700; }

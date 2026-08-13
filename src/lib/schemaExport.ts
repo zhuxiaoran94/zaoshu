@@ -27,7 +27,7 @@ export function fieldJsonSchema(field:FieldRule){
   return schema
 }
 
-const tableJsonSchema=(table:TableSchema)=>{const requiredFields=table.fields.filter(required).map(field=>field.name);return{title:table.label,type:'object',additionalProperties:false,properties:Object.fromEntries(table.fields.map(field=>[field.name,fieldJsonSchema(field)])),...(requiredFields.length?{required:requiredFields}:{}),...(table.countByReference?{'x-mock-cardinality':table.countByReference}:{})}}
+const tableJsonSchema=(table:TableSchema)=>{const requiredFields=table.fields.filter(required).map(field=>field.name);return{title:table.label,type:'object',additionalProperties:false,properties:Object.fromEntries(table.fields.map(field=>[field.name,fieldJsonSchema(field)])),...(requiredFields.length?{required:requiredFields}:{}),...(table.countByReference?{'x-mock-cardinality':table.countByReference}:{}),...(table.assertions?.length?{'x-mock-assertions':table.assertions}:{})}}
 
 export function toJSONSchema(project:ProjectSchema){return{$schema:'https://json-schema.org/draft/2020-12/schema',$id:`urn:mock-data:${project.id}`,title:project.name,description:project.description,type:'object',properties:Object.fromEntries(project.tables.map(table=>[table.name,{type:'array',items:{$ref:`#/$defs/${table.name}`}}])),$defs:Object.fromEntries(project.tables.map(table=>[table.name,tableJsonSchema(table)])),'x-mock-seed':project.seed,'x-mock-mode':project.mode,'x-schema-version':project.version}}
 
@@ -59,8 +59,9 @@ export function relationMarkdown(project: ProjectSchema) {
     if (rule.kind === 'aggregate') return `- \`${table.name}.${field.name}\` = ${rule.operation.toUpperCase()}(\`${rule.sourceTableId}.${rule.expression}\`)（通过 \`${rule.sourceForeignKey}\` 分组，小数精度 ${rule.precision ?? 2}）`
     return `- \`${table.name}.${field.name}\` ← \`${rule.sourceTableId}.${rule.sourceField}\`（\`${field.name}\` 所在行的 \`${rule.localForeignKey}\` = \`${rule.sourceKey}\`）`
   }))
+  const assertions = project.tables.flatMap(table => (table.assertions ?? []).map(assertion => `- **${table.label}.${assertion.name}**：\`${assertion.expression}\`（${assertion.severity === 'error' ? '失败' : '警告'}；${assertion.message}）`))
   const tables = sortTables(project.tables).map((table,index) => `${index + 1}. **${table.label}**（\`${table.name}\`）：${table.fields.length} 字段，${table.countByReference ? `按父记录生成 ${table.countByReference.min}–${table.countByReference.max} 条子数据` : `默认 ${table.count} 条`}`).join('\n')
-  return `# ${project.name} Schema 关系说明\n\n- Schema 版本：${project.version}\n- 随机种子：${project.seed}\n- 造数模式：${project.mode}\n- 数据表：${project.tables.length}\n- 字段：${project.tables.reduce((sum,table)=>sum+table.fields.length,0)}\n\n## 数据表\n\n${tables}\n\n## 外键关系\n\n${relations.length ? relations.join('\n') : '- 当前项目没有外键关系。'}\n\n## 跨表计算\n\n${calculations.length ? calculations.join('\n') : '- 当前项目没有跨表计算规则。'}\n`
+  return `# ${project.name} Schema 关系说明\n\n- Schema 版本：${project.version}\n- 随机种子：${project.seed}\n- 造数模式：${project.mode}\n- 数据表：${project.tables.length}\n- 字段：${project.tables.reduce((sum,table)=>sum+table.fields.length,0)}\n\n## 数据表\n\n${tables}\n\n## 外键关系\n\n${relations.length ? relations.join('\n') : '- 当前项目没有外键关系。'}\n\n## 跨表计算\n\n${calculations.length ? calculations.join('\n') : '- 当前项目没有跨表计算规则。'}\n\n## 业务断言\n\n${assertions.length ? assertions.join('\n') : '- 当前项目没有业务断言。'}\n`
 }
 
 export function schemaContractFiles(project:ProjectSchema):ContractFile[]{return[

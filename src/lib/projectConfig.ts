@@ -58,6 +58,14 @@ const fieldSchema = z.object({
   distributionCenter: z.number().finite().optional(),
 })
 
+const assertionSchema = z.object({
+  id: z.string().min(1).max(100),
+  name: z.string().min(1).max(80),
+  expression: z.string().min(1).max(500),
+  message: z.string().min(1).max(200),
+  severity: z.enum(['error', 'warning']),
+})
+
 const tableSchema = z.object({
   id: z.string().min(1).max(80),
   name: z.string().min(1).max(80).regex(/^[A-Za-z_][A-Za-z0-9_]*$/, '表名只能使用字母、数字和下划线'),
@@ -68,6 +76,7 @@ const tableSchema = z.object({
     min: z.number().int().min(0).max(1_000),
     max: z.number().int().min(0).max(1_000),
   }).optional(),
+  assertions: z.array(assertionSchema).max(20).optional(),
   fields: z.array(fieldSchema).min(1).max(MAX_FIELDS_PER_TABLE),
 })
 

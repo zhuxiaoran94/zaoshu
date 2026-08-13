@@ -42,6 +42,14 @@ export type RelationValueRule = {
   sourceField: string
 }
 
+export interface BusinessAssertion {
+  id: string
+  name: string
+  expression: string
+  message: string
+  severity: 'error' | 'warning'
+}
+
 export interface FieldRule {
   id: string
   name: string
@@ -81,6 +89,7 @@ export interface TableSchema {
     min: number
     max: number
   }
+  assertions?: BusinessAssertion[]
   fields: FieldRule[]
 }
 

@@ -27,6 +27,7 @@ if(commerceTemplate){
   const orderAmount=orders?.fields.find(field=>field.name==='amount'),paymentAmount=payments?.fields.find(field=>field.name==='amount')
   if(orderAmount&&items&&itemOrder){orderAmount.relationValue={kind:'aggregate',sourceTableId:items.id,sourceForeignKey:itemOrder.name,expression:'round(price * quantity, 2)',operation:'sum',precision:2};orderAmount.min=undefined;orderAmount.max=undefined}
   if(paymentAmount&&orders)paymentAmount.relationValue={kind:'lookup',localForeignKey:'orderId',sourceTableId:orders.id,sourceKey:'id',sourceField:'amount'}
+  if(payments)payments.assertions=[{id:'successful-payment-time',name:'成功支付必须有支付时间',expression:"status != '成功' || paidAt != null",message:'支付状态成功但支付时间为空',severity:'error'}]
 }
 
 export function cloneTemplate(templateId:string):ProjectSchema {
