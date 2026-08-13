@@ -1,0 +1,15 @@
+{
+  "name": "Mock造数工具",
+  "short_name": "Mock造数",
+  "description": "完全在浏览器本地运行的测试数据生成、异常注入和多格式导出工作台。",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#e8eff4",
+  "theme_color": "#102b3f",
+  "categories": ["developer", "productivity", "utilities"],
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
