@@ -309,6 +309,28 @@
 .bulk-field-panel footer { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
 .bulk-field-panel footer .button { height: 28px; padding: 0 9px; font-size: 9px; }
 
+.column-selector { position: relative; }
+.column-selector summary { display: flex; height: 28px; align-items: center; gap: 4px; border: 1px solid var(--line); border-radius: 6px; background: white; padding: 0 7px; color: var(--blue); font-size: 9px; cursor: pointer; list-style: none; }
+.column-selector summary::-webkit-details-marker { display: none; }
+.column-selector summary svg { width: 11px; }
+.column-selector summary svg:last-child { width: 9px; color: var(--muted); }
+.column-selector[open] summary svg:last-child { transform: rotate(180deg); }
+.column-selector > div { position: absolute; z-index: 8; top: 33px; left: 0; width: 230px; max-height: 310px; overflow: auto; border: 1px solid #c4d3da; border-radius: 8px; background: white; box-shadow: 0 14px 35px rgba(16,43,63,.18); padding: 6px; }
+.column-selector header { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #edf1f3; padding: 5px 5px 7px; }
+.column-selector header strong { font-size: 9px; }
+.column-selector header button { border: 0; background: transparent; color: var(--blue); font-size: 8px; }
+.column-selector label { display: grid; grid-template-columns: 14px 1fr auto; gap: 6px; align-items: center; padding: 6px 5px; font-size: 8px; }
+.column-selector label:hover { background: #f1f7f7; }
+.column-selector label input { width: auto; }
+.column-selector label code { max-width: 90px; overflow: hidden; color: var(--muted); font-size: 7px; text-overflow: ellipsis; }
+.view-export { display: flex; height: 28px; align-items: center; gap: 4px; border: 0; border-radius: 6px; background: #e6f3f1; padding: 0 7px; color: #17656b; font-size: 9px; }
+.view-export:disabled { opacity: .4; cursor: not-allowed; }
+.view-export svg { width: 11px; }
+.data-table th.sorted { background: #e0efee; color: #17656b; }
+.field-head .sort-field { display: inline-flex; width: auto; align-items: center; gap: 3px; background: transparent; color: inherit; white-space: nowrap; }
+.field-head .sort-field i { color: #91a1a9; font-size: 8px; font-style: normal; }
+.data-table th.sorted .sort-field i { color: var(--teal); }
+
 .pwa-status {
   position: fixed;
   right: 18px;
