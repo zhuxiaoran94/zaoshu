@@ -6,6 +6,7 @@ describe('Mock造数 CLI',()=>{
   it('拒绝未知参数、不安全整数、无效日期和冲突输入',()=>{expect(()=>parseCliArgs(['--wat'])).toThrow(/未知参数/);expect(()=>parseCliArgs(['--count','0'])).toThrow(/1–100000/);expect(()=>parseCliArgs(['--reference-date','not-a-date'])).toThrow(/有效 ISO 日期/);expect(()=>parseCliArgs(['--config','a.mock.json','--template','users'])).toThrow(/不能同时/);expect(()=>parseCliArgs(['--dry-run','--output','x.zip'])).toThrow(/不能与/);expect(()=>parseCliArgs(['--dry-run','--summary','summary.json'])).toThrow(/不能与/)})
   it('默认使用电商完整包且不覆盖文件',()=>{expect(parseCliArgs([])).toMatchObject({template:'commerce',format:'bundle',force:false,dryRun:false,failOnQuality:false})})
   it('支持无需生成数据的 Schema 契约格式',()=>expect(parseCliArgs(['--format','schema','--config','project.mock.json'])).toMatchObject({format:'schema',config:'project.mock.json'}))
+  it('支持可直接接入项目的 Mock API 交付格式',()=>expect(parseCliArgs(['--format','mock-api','--template','commerce'])).toMatchObject({format:'mock-api',template:'commerce'}))
   it('dry-run 使用动态基数计划量，count 覆盖会切回固定数量',async()=>{
     const dynamic=await runCli({...parseCliArgs(['--template','commerce','--dry-run']),dryRun:true}),fixed=await runCli({...parseCliArgs(['--template','commerce','--count','2','--dry-run']),dryRun:true})
     expect(dynamic).toMatchObject({dryRun:true,plannedRows:239});expect(fixed).toMatchObject({dryRun:true,plannedRows:10})

@@ -11,7 +11,7 @@ import { createSchemaContractPackage } from './lib/schemaExport'
 import type { DataMode, ProjectSchema } from './types'
 import { plannedProjectTotal } from './lib/cardinality'
 
-const FORMATS=['schema','bundle','json','jsonl','csv','tsv','yaml','xml','xlsx','mysql','postgres','sqlite','postman','playwright','cypress','jest','pytest','junit','markdown'] as const
+const FORMATS=['schema','mock-api','bundle','json','jsonl','csv','tsv','yaml','xml','xlsx','mysql','postgres','sqlite','postman','playwright','cypress','jest','pytest','junit','markdown'] as const
 const MODES=['random','realistic','boundary','exception','pairwise'] as const
 type CliFormat=typeof FORMATS[number]
 

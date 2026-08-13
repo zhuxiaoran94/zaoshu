@@ -1,5 +1,27 @@
 # 更新日志
 
+## 4.5.0 - Mock API 交付版
+
+### 从数据文件到可调用接口
+
+- 导出中心新增“Mock API 项目”，一次生成 `db.json`、MSW v2 handlers、浏览器启动器、Node 测试服务器、OpenAPI 3.1、路由清单和接入 README。
+- 每张表自动生成列表、单条、新增、局部修改和删除路由；列表提供全文搜索、任意 Schema 字段精确筛选、分页、升降序排序与 `X-Total-Count`。
+- POST 可自动生成数值或 UUID 主键，重复主键返回 409；PATCH 保持原主键，找不到记录返回 404，非法 JSON 返回 400。
+- `resetMockData()` 可让测试之间恢复固定初始数据，浏览器与 Vitest/Node 两种入口可直接接入 MSW v2。
+
+### 契约与安全边界
+
+- OpenAPI 3.1 新增全部 CRUD paths，不再只输出 Schema；可导入 Apifox、Postman 或 Swagger UI 查看和消费。
+- 写请求按当前数据表字段白名单过滤，不接受 Schema 外属性；排序字段同样限制在字段清单内。
+- `db.json` 自动剥离工具内部 `_mock_meta`，避免异常审计信息污染被测接口的数据结构。
+- Mock API 产物只在下载者自己的浏览器或测试进程内运行，不在 Cloudflare 公共站点开放数据库或匿名写接口。
+- Web UI 与 CLI 均支持 `mock-api` 格式，继续使用 ZIP Manifest、SHA-256、固定种子、时间基准及安全拒绝覆盖机制。
+
+### 验证
+
+- 新增路由一致性、生成 TypeScript 语法、字段白名单、复位、元信息清理、OpenAPI CRUD 和完整 ZIP 专项测试，总测试数增至 112。
+- 生产构建及 Cloudflare/PWA 产物检查通过，Mock API 代码按需加载，首屏 JavaScript 约 446.5 KiB。
+
 ## 4.4.0 - 时间基准版
 
 ### 跨环境精确复现

@@ -2,7 +2,7 @@
 
 面向测试人员的浏览器端测试数据工作台。内置 120+ 字段生成类型和用户、电商、金融、游戏、社区、物流、测试通用七类场景，无需上传任何数据即可生成多表关联测试数据。
 
-当前版本：**4.4.0 时间基准版**。网站没有匿名写入接口，访客的数据与配置仅保存在各自浏览器中。
+当前版本：**4.5.0 Mock API 交付版**。网站没有匿名写入接口，访客的数据与配置仅保存在各自浏览器中。
 
 ## 功能
 
@@ -11,6 +11,7 @@
 - 异常数据注入与 `_mock_meta` 预期结果标记
 - 数据质量检查、覆盖报告和业务状态链
 - JSON、JSONL、CSV、TSV、XLSX、MySQL、PostgreSQL、SQLite 导出
+- 一键导出可直接接入前端与测试项目的 MSW v2 Mock API 包，包含固定数据、浏览器/Node 启动器和 OpenAPI 契约
 - Postman 数据、TypeScript Fixture 和 Markdown 报告导出
 - 可选本地自定义数据池，所有配置保存在浏览器
 - 项目配置安全备份、恢复内置模板和清除本地数据
@@ -89,7 +90,7 @@
 - GitHub Actions 对每次 push/PR 运行锁定依赖安装、全部测试、生产构建、Cloudflare/PWA 产物与首屏体积检查
 - CI 和 Dependabot 阻断新增高危生产依赖漏洞，CODEOWNERS、PR 模板和贡献规则要求维护者审查公开改动
 - Excel 多表导出由受控 Office Open XML 写入器完成，只生成工作簿、不解析输入文件，并保留公式注入防护
-- CLI 可直接使用七套内置模板或网页导出的 `.mock.json`，覆盖种子、模式、每表数量和 18 种导出格式
+- CLI 可直接使用七套内置模板或网页导出的 `.mock.json`，覆盖种子、模式、每表数量和 20 种导出格式
 - CLI 支持 dry-run、机器 JSON 摘要、质量失败退出码和安全拒绝覆盖，适合 CI 测试准备与产物留档
 - `⌘/Ctrl + K` 命令中心统一搜索生成、导出、项目、Schema、数据池、模式、模板和结果面板
 - 命令中心支持中文/英文关键词、多词过滤、↑↓/Enter/Esc 操作、焦点陷阱与关闭后焦点恢复
@@ -130,6 +131,12 @@
 - 状态链事件时间同样跟随项目基准；一键“设为现在”适合临时联调，固定日期适合回归和缺陷复现
 - CLI 提供 `--reference-date`，配置、分享、快照差异、契约、Manifest 和覆盖报告均记录基准时间
 - 旧项目未包含时间基准时使用固定兼容值，不依赖运行当天，也不会因升级而无法导入
+- Mock API 交付包包含 `db.json`、MSW v2 `handlers.ts`、浏览器/Node 启动器、OpenAPI、路由清单与接入说明
+- 每张表自动获得列表、单条、新增、修改和删除接口；列表支持分页、全文搜索、字段精确筛选和稳定排序
+- 内存 CRUD 支持数值/UUID 主键自动生成、重复主键 409、404/400 响应以及一键恢复初始数据
+- 写请求按当前 Schema 字段白名单过滤，PATCH 锁定主键；导出的正常业务数据会剥离工具内部 `_mock_meta`
+- OpenAPI 3.1 不再只有数据模型，同时输出全部 CRUD 路径，可直接导入 Apifox、Postman 或 Swagger UI
+- Mock API 只在使用者自己的浏览器或测试进程中拦截请求，不会给 Cloudflare 公共站点增加数据库或匿名写接口
 
 完整版本记录见 [CHANGELOG.md](./CHANGELOG.md)，已实现与待实现功能见 [ROADMAP.md](./ROADMAP.md)。
 
@@ -186,6 +193,14 @@ npm run mock -- \
 npm run mock -- --template commerce --format schema --output artifacts/commerce-schema.zip
 ```
 
+生成可直接放入前端/Vitest 项目的 MSW v2 Mock API：
+
+```bash
+npm run mock -- --template commerce --seed 42 --format mock-api --output artifacts/commerce-mock-api.zip
+```
+
+解压后安装 `msw`，浏览器入口调用 `startMockApi()`，Node/Vitest 使用导出的 `server`；详细路由与接入代码在包内 `mock-api/README.md`。
+
 ## Cloudflare Pages
 
 - 构建命令：`npm run build`
@@ -197,6 +212,7 @@ npm run mock -- --template commerce --format schema --output artifacts/commerce-
 ### 为什么公开部署不容易被别人搞坏
 
 - 站点是 Cloudflare Pages 静态文件，没有数据库和公共写入 API。
+- “Mock API”是下载到使用者项目中的本地拦截代码，不在 Cloudflare 站点托管可写数据。
 - 用户配置、业务字典和生成结果均不上传，访客之间互不影响。
 - 分享链接只携带 Schema 与种子并使用 URL fragment；它不是加密或访问控制，持有链接的人可以查看规则并编辑自己的副本。
 - 导入文件有 1 MB 体积限制，并校验表数、字段数、行数和字段格式。
