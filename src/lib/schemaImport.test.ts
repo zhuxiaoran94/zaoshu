@@ -34,4 +34,15 @@ describe('Schema 导入',()=>{
     const result=importSchemaText(`DROP TABLE secrets; CREATE TABLE safe_table (id INTEGER PRIMARY KEY, note TEXT); INSERT INTO safe_table VALUES (1, 'x');`)
     expect(result.project.tables.map(table=>table.name)).toEqual(['safe_table']);expect(result.project.tables[0].count).toBe(20)
   })
+  it('从 TypeScript interface 推断可选、可空、枚举、日期和外键',()=>{
+    const source=`export interface User { readonly id: number; email: string; status: '正常' | '冻结'; nickname?: string | null; createdAt: Date }\nexport interface Order { id: number; userId: number; buyer: User; amount: number; paid: boolean; tags: string[] }`
+    const result=importSchemaText(source),users=result.project.tables.find(table=>table.name==='user')!,orders=result.project.tables.find(table=>table.name==='order')!
+    expect(result.source).toBe('typescript');expect(users.fields.find(field=>field.name==='status')?.values).toEqual(['正常','冻结']);expect(users.fields.find(field=>field.name==='nickname')).toMatchObject({missing:15,nullable:10});expect(users.fields.find(field=>field.name==='createdAt')).toMatchObject({dataType:'date',generator:'dateTime'})
+    expect(orders.fields.find(field=>field.name==='userId')?.ref).toEqual({tableId:users.id,field:'id'});expect(orders.fields.find(field=>field.name==='buyer')?.ref).toEqual({tableId:users.id,field:'id'});expect(orders.fields.find(field=>field.name==='tags')).toMatchObject({dataType:'object',fixedValue:'[]'})
+  })
+  it('TypeScript 解析不执行代码，并对无法识别的成员给出告警',()=>{
+    ;(globalThis as Record<string,unknown>).__mockExecuted=false
+    const result=importSchemaText(`interface Safe { id: number; run(): void; payload: { nested: string }; note: string = ((globalThis.__mockExecuted = true) as any) }`)
+    expect((globalThis as Record<string,unknown>).__mockExecuted).toBe(false);expect(result.project.tables[0].fields.some(field=>field.name==='payload')).toBe(true);expect(result.warnings.length).toBeGreaterThan(0)
+  })
 })

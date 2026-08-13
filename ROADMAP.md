@@ -27,6 +27,7 @@
 - [x] MySQL、PostgreSQL、SQLite DDL Schema 导入
 - [x] 六种真实数值/日期分布、枚举权重与业务模板预设
 - [x] 精确覆盖缺口分析、字段定位与一键最少补数
+- [x] TypeScript interface/type 静态推断与类型引用建模
 
 ## 近期版本
 
@@ -39,7 +40,7 @@
 ## 后续探索
 
 - [ ] OpenAPI 3.x YAML 与本地 `$ref` 解析
-- [ ] TypeScript 类型推断
+- [x] TypeScript 类型推断
 - [ ] Web Streams 真正流式导出百万级数据
 - [ ] 可选的只读分享链接（不包含真实数据）
 - [ ] CLI 与 CI 接入

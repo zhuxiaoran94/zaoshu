@@ -1,7 +1,7 @@
 import type { DataType, FieldRule, ProjectSchema, TableSchema } from '../types'
 import { MAX_CONFIG_BYTES } from './projectConfig'
 
-export interface ImportPreview { source:'openapi'|'json'|'sql'; project:ProjectSchema; warnings:string[] }
+export interface ImportPreview { source:'openapi'|'json'|'sql'|'typescript'; project:ProjectSchema; warnings:string[] }
 
 const MAX_TABLES=50,MAX_FIELDS=200
 const safeName=(value:string,fallback:string)=>{const normalized=value.trim().replace(/[^A-Za-z0-9_]/g,'_').replace(/^([^A-Za-z_])/,'_$1').slice(0,80);return normalized||fallback}
@@ -73,10 +73,30 @@ function fromSql(raw:string):ImportPreview {
   return{source:'sql',warnings:truncated?[`仅导入前 ${MAX_TABLES} 个 CREATE TABLE 语句`]:[],project:{id:`project_${Date.now()}`,name:'SQL DDL Mock 数据',templateId:'imported-sql',description:'从 SQL CREATE TABLE 本地解析生成',seed:20250814,mode:'random',version:'1.0',tables}}
 }
 
+interface TypeDeclaration { name:string; body:string }
+const stripTypeScriptComments=(raw:string)=>raw.replace(/\/\*[\s\S]*?\*\//g,' ').replace(/(^|[^:])\/\/[^\r\n]*/g,'$1 ')
+const typeDeclarations=(raw:string)=>{const clean=stripTypeScriptComments(raw),declarations:TypeDeclaration[]=[];const regex=/(?:^|[;\n])\s*(?:export\s+)?(?:declare\s+)?(?:interface\s+([A-Za-z_$][\w$]*)(?:\s+extends\s+[^\{]+)?|type\s+([A-Za-z_$][\w$]*)\s*=)\s*\{/g;let match:RegExpExecArray|null
+  while((match=regex.exec(clean))&&declarations.length<MAX_TABLES){let depth=1,index=regex.lastIndex,quote='';for(;index<clean.length&&depth>0;index++){const char=clean[index];if(quote){if(char===quote&&clean[index-1]!=='\\')quote='';continue}if(["'",'"','`'].includes(char)){quote=char;continue}if(char==='{')depth++;else if(char==='}')depth--}if(depth!==0)throw new Error(`类型 ${match[1]||match[2]} 的大括号没有闭合`);declarations.push({name:match[1]||match[2],body:clean.slice(regex.lastIndex,index-1)});regex.lastIndex=index}return{declarations,truncated:(clean.match(/\b(?:interface|type)\s+[A-Za-z_$][\w$]*(?:\s+extends\s+[^\{=]+)?\s*(?:=\s*)?\{/g)||[]).length>MAX_TABLES}}
+const splitTypeMembers=(body:string)=>{const members:string[]=[];let current='',curly=0,square=0,round=0,angle=0,quote='';for(let index=0;index<body.length;index++){const char=body[index];if(quote){current+=char;if(char===quote&&body[index-1]!=='\\')quote='';continue}if(["'",'"','`'].includes(char)){quote=char;current+=char;continue}if(char==='{')curly++;else if(char==='}')curly--;else if(char==='[')square++;else if(char===']')square--;else if(char==='(')round++;else if(char===')')round--;else if(char==='<')angle++;else if(char==='>')angle=Math.max(0,angle-1);if((char===';'||char===','||char==='\n')&&curly===0&&square===0&&round===0&&angle===0){if(current.trim())members.push(current.trim());current=''}else current+=char}if(current.trim())members.push(current.trim());return members}
+const literalValues=(type:string)=>{const parts=type.split('|').map(part=>part.trim()).filter(part=>!['null','undefined'].includes(part));if(!parts.length||!parts.every(part=>/^(?:'([^']*)'|"([^"]*)"|-?\d+(?:\.\d+)?|true|false)$/.test(part)))return undefined;return parts.map(part=>{const string=part.match(/^(?:'([^']*)'|"([^"]*)")$/);return string?(string[1]??string[2]):part})}
+const typeField=(name:string,rawType:string,optional:boolean):{field:FieldRule;referenceType?:string}=>{const nullable=/(^|\|)\s*null\s*(\||$)/.test(rawType),type=rawType.replace(/\|\s*(?:null|undefined)\b/g,'').trim(),array=type.match(/^(?:Readonly)?Array\s*<([\s\S]+)>$/)||type.match(/^([\s\S]+)\[\]$/),values=literalValues(type),reference=/^[A-Z_$][\w$]*$/.test(type)?type:undefined;let dataType:DataType='string',generator='randomString',fixedValue:string|undefined
+  if(values?.length){generator='customEnum';dataType=values.every(value=>!Number.isNaN(Number(value)))?'number':'string'}else if(/^(number|bigint)$/.test(type)){dataType='number';generator=inferGenerator(name,dataType)}else if(type==='boolean'){dataType='boolean';generator='boolean'}else if(type==='Date'){dataType='date';generator=inferGenerator(name,dataType,'date-time')}else if(array||/^\{|^(?:Record|Map|Set|object|unknown|any)\b/.test(type)){dataType='object';generator='fixed';fixedValue=array?'[]':'{}'}else if(reference){dataType='object';generator='fixed';fixedValue='{}'}else generator=inferGenerator(name,dataType)
+  const field:FieldRule={id:id(),name:safeName(name,'field'),label:label(name),generator,dataType,missing:optional?15:0};if(nullable)field.nullable=10;if(values?.length)field.values=values.slice(0,10_000);if(fixedValue!==undefined)field.fixedValue=fixedValue;if(field.name==='id'){field.primaryKey=true;field.unique=true}
+  return{field,referenceType:reference}
+}
+
+function fromTypeScript(raw:string):ImportPreview {
+  const{declarations,truncated}=typeDeclarations(raw);if(!declarations.length)throw new Error('没有识别到 TypeScript interface 或对象 type 声明')
+  const warnings:string[]=truncated?[`仅导入前 ${MAX_TABLES} 个 TypeScript 类型`]:[],references:Array<{table:string;field:FieldRule;target:string}>=[],tables=declarations.map((declaration,index)=>{const fields:FieldRule[]=[];for(const member of splitTypeMembers(declaration.body).slice(0,MAX_FIELDS)){if(/^\[/.test(member)||/^\(/.test(member)){warnings.push(`${declaration.name} 中的索引签名或方法已忽略`);continue}const match=member.match(/^(?:readonly\s+)?(?:['"]([^'"]+)['"]|([A-Za-z_$][\w$]*))\s*(\?)?\s*:\s*([\s\S]+)$/);if(!match){if(member.trim())warnings.push(`${declaration.name} 中无法识别成员：${member.slice(0,60)}`);continue}const fieldName=match[1]||match[2],parsed=typeField(fieldName,match[4].trim(),!!match[3]);fields.push(parsed.field);if(parsed.referenceType)references.push({table:declaration.name,field:parsed.field,target:parsed.referenceType})}if(!fields.length)fields.push({id:id(),name:'id',label:'ID',generator:'autoId',dataType:'number',primaryKey:true,unique:true});const primary=fields.find(field=>field.name==='id');if(primary){primary.primaryKey=true;primary.unique=true}return{id:`ts_${index}_${safeName(declaration.name,'table').toLowerCase()}`,name:safeName(declaration.name,`table_${index+1}`).toLowerCase(),label:label(declaration.name),count:20,fields}})
+  const byType=new Map(declarations.map((declaration,index)=>[declaration.name,tables[index]]));for(const reference of references){const target=byType.get(reference.target),targetPrimary=target?.fields.find(field=>field.primaryKey);if(!target||!targetPrimary){warnings.push(`${reference.table}.${reference.field.name} 引用了未导入类型 ${reference.target}，保留为对象字段`);continue}reference.field.ref={tableId:target.id,field:targetPrimary.name};reference.field.dataType=targetPrimary.dataType;reference.field.generator=targetPrimary.generator;reference.field.fixedValue=undefined;warnings.push(`${reference.table}.${reference.field.name} 已按 ${reference.target}.${targetPrimary.name} 建立外键`)}connectIdReferences(tables)
+  return{source:'typescript',warnings,project:{id:`project_${Date.now()}`,name:'TypeScript 类型 Mock 数据',templateId:'imported-typescript',description:'从 TypeScript interface/type 本地静态解析生成',seed:20250814,mode:'random',version:'1.0',tables}}
+}
+
 export function importSchemaText(raw:string):ImportPreview {
   if(new Blob([raw]).size>MAX_CONFIG_BYTES)throw new Error('Schema 文件不能超过 1 MB')
   if(/\bCREATE\s+TABLE\b/i.test(raw))return fromSql(raw)
-  let value:unknown;try{value=JSON.parse(raw)}catch{throw new Error('当前支持 OpenAPI JSON、普通 JSON 或 SQL CREATE TABLE；请先将 YAML 转为 JSON')}
+  if(/\binterface\s+[A-Za-z_$][\w$]*(?:\s+extends\s+[^\{]+)?\s*\{|\btype\s+[A-Za-z_$][\w$]*\s*=\s*\{/.test(raw))return fromTypeScript(raw)
+  let value:unknown;try{value=JSON.parse(raw)}catch{throw new Error('当前支持 OpenAPI/普通 JSON、SQL CREATE TABLE 或 TypeScript interface/type；请先将 YAML 转为 JSON')}
   if(value&&typeof value==='object'&&!Array.isArray(value)&&typeof (value as Record<string,unknown>).openapi==='string')return fromOpenApi(value as Record<string,unknown>)
   return fromJson(value)
 }
