@@ -82,6 +82,9 @@ export interface QualityCheck {
   status: 'pass' | 'warning' | 'expected' | 'fail'
   detail: string
   tableId?: string
+  fieldId?: string
+  rowIndexes?: number[]
+  issueCount?: number
 }
 
 export type CoverageGapKind = 'enum' | 'null' | 'missing' | 'boundary'

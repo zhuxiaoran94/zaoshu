@@ -330,6 +330,12 @@
 .field-head .sort-field { display: inline-flex; width: auto; align-items: center; gap: 3px; background: transparent; color: inherit; white-space: nowrap; }
 .field-head .sort-field i { color: #91a1a9; font-size: 8px; font-style: normal; }
 .data-table th.sorted .sort-field i { color: var(--teal); }
+.quality-focus-banner { display: flex; height: 34px; flex: none; align-items: center; gap: 7px; border-bottom: 1px solid #e1c787; background: #fff8e8; padding: 0 12px; color: #8d620e; font-size: 9px; }
+.quality-focus-banner svg { width: 13px; }
+.quality-focus-banner button { margin-left: auto; border: 0; background: transparent; color: var(--blue); font-size: 9px; font-weight: 700; }
+.report-list article.locatable { cursor: pointer; }
+.report-list article.locatable:hover { border-color: #8abdc1; background: #f5fbfa; }
+.report-list article.locatable em { color: var(--blue); }
 
 .pwa-status {
   position: fixed;
