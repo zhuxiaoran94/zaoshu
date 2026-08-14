@@ -101,6 +101,9 @@
 - [x] Mock API 单条 PUT 完整替换与 PATCH 部分修改的严格语义区分
 - [x] PUT 必填字段、URL 主键、唯一字段、外键与 If-Match 统一保护
 - [x] PUT 路由场景 UI/CLI、调用预期、请求追踪、OpenAPI 与独立 HTTP 自测
+- [x] Mock API 页码/游标列表集合 ETag 与 If-None-Match 条件轮询
+- [x] 集合 ETag 绑定完整底层页、响应裁剪、展开父记录、总数和游标元数据
+- [x] 列表 304 保留分页响应头、512 字符上限、OpenAPI 与独立 HTTP 自测
 
 ## 近期版本
 

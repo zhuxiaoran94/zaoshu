@@ -289,6 +289,18 @@ const rowEtag = (row: MockRecord) => {
   const value = JSON.stringify(row)
   return '"mock-' + textFingerprint(value) + '"'
 }
+const collectionEtag = (resource: ResourceDefinition, url: URL, rawRows: MockRecord[], responseBody: unknown, meta: MockRecord) => {
+  const query: [string, string][] = []
+  url.searchParams.forEach((value, key) => query.push([key, value]))
+  return '"mock-list-' + textFingerprint(JSON.stringify({ resource: resource.resource, query: query.sort(), rawRows, responseBody, meta })) + '"'
+}
+const notModified = (request: Request, etag: string, headers: Record<string, string> = {}) => {
+  const value = request.headers.get('If-None-Match')
+  if (value === null) return null
+  if (value.length > 512) return errorResponse(400, 'If-None-Match must be under 512 characters')
+  const candidates = value.split(',').map(candidate => candidate.trim().replace(/^W\\//, ''))
+  return candidates.includes('*') || candidates.includes(etag) ? new Response(null, { status: 304, headers: { ETag: etag, ...headers } }) : null
+}
 const etagResponse = (row: MockRecord, status = 200) => HttpResponse.json(wrapped(row), { status, headers: { ETag: rowEtag(row) } })
 const preconditionResponse = (row: MockRecord, details?: MockRecord) => {
   const currentEtag = rowEtag(row)
@@ -304,12 +316,8 @@ const ifMatchError = (value: unknown, row: MockRecord, details?: MockRecord) => 
 const readWithEtag = (request: Request, row: MockRecord, resource: ResourceDefinition) => {
   const shape = responseShape(new URL(request.url), resource)
   if (!shape.ok) return shape.response
-  const etag = rowEtag(row), value = request.headers.get('If-None-Match')
-  if (value !== null) {
-    if (value.length > 512) return errorResponse(400, 'If-None-Match must be under 512 characters')
-    const candidates = value.split(',').map(candidate => candidate.trim().replace(/^W\\//, ''))
-    if (candidates.includes('*') || candidates.includes(etag)) return new Response(null, { status: 304, headers: { ETag: etag } })
-  }
+  const etag = rowEtag(row), conditional = notModified(request, etag)
+  if (conditional) return conditional
   return HttpResponse.json(wrapped(shapeRecord(row, resource, shape.fields, shape.expands)), { headers: { ETag: etag } })
 }
 
@@ -591,11 +599,9 @@ export const handlers = resources.flatMap(resource => [
       rows = rows.filter(row => compareTuple(row, cursor.values as unknown[]) > 0)
     }
     const page = Math.max(1, Number(url.searchParams.get('_page')) || 1), start = cursorRequested ? 0 : (page - 1) * limit, rawPageRows = rows.slice(start, start + limit), hasMore = rows.length > start + limit
-    const nextCursor = cursorRequested && hasMore && rawPageRows.length ? encodeCursor({ version: 1, resource: resource.resource, query: cursorQueryFingerprint(url), sort: sorts.join(','), values: sorts.map(sort => rawPageRows.at(-1)![sort.replace(/^-/, '')]) }) : null, pageRows = rawPageRows.map(row => shapeRecord(row, resource, shape.fields, shape.expands))
-    return HttpResponse.json(
-      wrapped(pageRows, { ...(cursorRequested ? { nextCursor, hasMore } : { page }), limit, total }),
-      { headers: { 'X-Total-Count': String(total), ...(nextCursor ? { 'X-Next-Cursor': nextCursor } : {}) } },
-    )
+    const nextCursor = cursorRequested && hasMore && rawPageRows.length ? encodeCursor({ version: 1, resource: resource.resource, query: cursorQueryFingerprint(url), sort: sorts.join(','), values: sorts.map(sort => rawPageRows.at(-1)![sort.replace(/^-/, '')]) }) : null, pageRows = rawPageRows.map(row => shapeRecord(row, resource, shape.fields, shape.expands)), meta = { ...(cursorRequested ? { nextCursor, hasMore } : { page }), limit, total }, responseBody = wrapped(pageRows, meta), etag = collectionEtag(resource, url, rawPageRows, responseBody, meta), conditional = notModified(request, etag, { 'X-Total-Count': String(total), ...(nextCursor ? { 'X-Next-Cursor': nextCursor } : {}) })
+    if (conditional) return conditional
+    return HttpResponse.json(responseBody, { headers: { ETag: etag, 'X-Total-Count': String(total), ...(nextCursor ? { 'X-Next-Cursor': nextCursor } : {}) } })
   })),
   http.get('*/api/' + resource.resource + '/:id', ({ params, request }) => withNetwork(request, () => {
     const row = db[resource.resource].find(item => sameId(item[resource.key], params.id))
@@ -1016,7 +1022,7 @@ ${routes.map(route=>`- \`GET ${route.list}?_page=1&_limit=20&_sort=-${route.prim
 
 ${nested.length?`### 父子嵌套查询\n\n${nested.map(route=>`- \`GET ${route.path}\`（${route.parent} → ${route.child}.${route.foreignKey}）`).join('\n')}\n`:''}
 
-列表同时支持原页码分页和游标分页：传 \`_cursor=start\` 获取第一页，后续传 \`X-Next-Cursor\`；游标绑定资源、筛选、排序、响应形态和当前进程随机密钥，篡改、跨查询复用或与 \`_page\` 混用返回 400。排序相同值会自动追加主键消歧，翻页期间新增更早记录不会导致已有记录重复。游标模式在 meta 返回 \`nextCursor/hasMore/limit/total\`。字段筛选支持 \`eq/ne/gt/gte/lt/lte/contains/starts/ends/in/isnull\`，多个参数按 AND 组合；\`_sort=-price,name\` 可按最多 5 个字段排序。列表和单条 GET 可用 \`_fields=id,status\` 裁剪响应；有父表外键的资源可用 \`_expand=userId\` 在 \`userId_expanded\` 返回一层父记录。裁剪最多 50 个字段、展开最多 5 个外键且不会递归；未知字段或非外键展开返回 400。ETag 始终基于完整底层记录，不因返回字段变化而改变。为避免恶意查询拖慢本地页面，每次最多 50 个参数，名称最多 120 字符、普通值最多 1,000 字符、游标最多 4,200 字符、\`in\` 最多 50 项，超过时返回 400。列表响应包含 \`X-Total-Count\`，业务响应包含稳定请求编号 \`X-Mock-Request-Id\` 和实际等待毫秒数 \`X-Mock-Latency\`，注入失败额外包含 \`X-Mock-Injected-Failure: true\`；单页最多 1,000 条。单条 GET/POST/PUT/PATCH/DELETE 返回基于当前记录内容的强 \`ETag\`；GET 可发送 \`If-None-Match\` 获得 304，PUT/PATCH/DELETE 可发送 \`If-Match\`，过期时返回 412 与最新 ETag，避免旧页面覆盖新数据。PUT 是真正的完整替换：URL 中的主键保持不变，未提交的可选字段会删除，全部必填字段始终要提供；PATCH 只合并请求中出现的字段。批量修改/删除可在每项携带 \`ifMatch\`，跨表事务的 update/delete 动作也支持它，任一过期会回滚全部前序变更。单条 POST、批量 POST 和跨表事务可发送 1–80 位 \`Idempotency-Key\`：同键、同方法、同路径和同请求体会原样重放且只写入一次，响应带 \`X-Mock-Idempotent-Replay: true\`；同键异参返回 409。缓存限制为最近 100 项和 10 MiB，请求签名输入限制 1 MiB；故障注入发生在幂等处理之前，因此模拟网络失败不会缓存，客户端可以按真实习惯重试。POST 自动补充缺失主键，主键或 Schema 中标记为 unique 的字段重复时返回 409 与 \`field/rule=unique\`。严格 Schema 校验关闭时，未知字段被兼容性丢弃；开启后，未知字段、类型、必填、空值、枚举、范围、长度和 PUT/PATCH 主键修改均返回 422，并附带 \`field\` 与 \`rule\`。开启外键校验时，POST/PUT/PATCH 的悬空外键返回 422。批量新增接受 JSON 数组或 \`{ items: [] }\`；单批最多 1,000 条。任一条格式、Schema、唯一、主键、外键、ETag 或引用策略失败都会整批不落库，并在错误中返回从 0 开始的 \`index\`。级联批量删除会在 \`meta.cascaded\` 返回额外清理的后代数量。
+列表同时支持原页码分页和游标分页：传 \`_cursor=start\` 获取第一页，后续传 \`X-Next-Cursor\`；游标绑定资源、筛选、排序、响应形态和当前进程随机密钥，篡改、跨查询复用或与 \`_page\` 混用返回 400。排序相同值会自动追加主键消歧，翻页期间新增更早记录不会导致已有记录重复。游标模式在 meta 返回 \`nextCursor/hasMore/limit/total\`。字段筛选支持 \`eq/ne/gt/gte/lt/lte/contains/starts/ends/in/isnull\`，多个参数按 AND 组合；\`_sort=-price,name\` 可按最多 5 个字段排序。列表和单条 GET 可用 \`_fields=id,status\` 裁剪响应；有父表外键的资源可用 \`_expand=userId\` 在 \`userId_expanded\` 返回一层父记录。裁剪最多 50 个字段、展开最多 5 个外键且不会递归；未知字段或非外键展开返回 400。ETag 始终基于完整底层记录，不因返回字段变化而改变。为避免恶意查询拖慢本地页面，每次最多 50 个参数，名称最多 120 字符、普通值最多 1,000 字符、游标最多 4,200 字符、\`in\` 最多 50 项，超过时返回 400。列表响应包含集合 ETag、\`X-Total-Count\` 及可选 \`X-Next-Cursor\`；轮询时发送 \`If-None-Match\`，查询页和展开父记录都未变化会返回无响应体的 304，并保留分页响应头。集合 ETag 同时绑定查询参数、完整底层页记录、展开父记录、总数和游标元数据；隐藏字段变化也不会漏报。业务响应还包含稳定请求编号 \`X-Mock-Request-Id\` 和实际等待毫秒数 \`X-Mock-Latency\`，注入失败额外包含 \`X-Mock-Injected-Failure: true\`；单页最多 1,000 条。单条 GET/POST/PUT/PATCH/DELETE 返回基于当前记录内容的强 \`ETag\`；GET 可发送 \`If-None-Match\` 获得 304，PUT/PATCH/DELETE 可发送 \`If-Match\`，过期时返回 412 与最新 ETag，避免旧页面覆盖新数据。PUT 是真正的完整替换：URL 中的主键保持不变，未提交的可选字段会删除，全部必填字段始终要提供；PATCH 只合并请求中出现的字段。批量修改/删除可在每项携带 \`ifMatch\`，跨表事务的 update/delete 动作也支持它，任一过期会回滚全部前序变更。单条 POST、批量 POST 和跨表事务可发送 1–80 位 \`Idempotency-Key\`：同键、同方法、同路径和同请求体会原样重放且只写入一次，响应带 \`X-Mock-Idempotent-Replay: true\`；同键异参返回 409。缓存限制为最近 100 项和 10 MiB，请求签名输入限制 1 MiB；故障注入发生在幂等处理之前，因此模拟网络失败不会缓存，客户端可以按真实习惯重试。POST 自动补充缺失主键，主键或 Schema 中标记为 unique 的字段重复时返回 409 与 \`field/rule=unique\`。严格 Schema 校验关闭时，未知字段被兼容性丢弃；开启后，未知字段、类型、必填、空值、枚举、范围、长度和 PUT/PATCH 主键修改均返回 422，并附带 \`field\` 与 \`rule\`。开启外键校验时，POST/PUT/PATCH 的悬空外键返回 422。批量新增接受 JSON 数组或 \`{ items: [] }\`；单批最多 1,000 条。任一条格式、Schema、唯一、主键、外键、ETag 或引用策略失败都会整批不落库，并在错误中返回从 0 开始的 \`index\`。级联批量删除会在 \`meta.cascaded\` 返回额外清理的后代数量。
 
 ## 文件
 
@@ -1056,6 +1062,17 @@ describe(${JSON.stringify(project.name+' Mock API')}, () => {
     expect(response.status).toBe(200)
     expect(Number(response.headers.get('X-Total-Count'))).toBe(db[${JSON.stringify(first.name)}].length)
     expect(unwrap(await response.json())).toHaveLength(Math.min(2, db[${JSON.stringify(first.name)}].length))
+  })
+
+  it('列表 ETag 避免重复传输并感知完整底层记录变化', async () => {
+    const url = origin + ${JSON.stringify(`/api/${first.name}?_page=1&_limit=2&_fields=${firstPrimary.name}`)}
+    const initial = await fetch(url), etag = initial.headers.get('ETag')!
+    expect(etag).toMatch(/^"mock-list-/)
+    const cached = await fetch(url, { headers: { 'If-None-Match': etag } })
+    expect(cached.status).toBe(304); expect(await cached.text()).toBe('')
+    db[${JSON.stringify(first.name)}][0].__hiddenRevision = 2
+    const changed = await fetch(url, { headers: { 'If-None-Match': etag } })
+    expect(changed.status).toBe(200); expect(changed.headers.get('ETag')).not.toBe(etag)
   })
 
   it('游标分页绑定查询条件并拒绝篡改', async () => {
