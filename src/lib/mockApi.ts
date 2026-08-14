@@ -21,6 +21,12 @@ export const mockApiControlRoutes=[
   {method:'DELETE',path:'/api/__mock/snapshots/:name',description:'删除指定场景快照'},
   {method:'POST',path:'/api/__mock/transactions',description:'原子执行最多 100 步受限跨表数据事务'},
   {method:'DELETE',path:'/api/__mock/idempotency',description:'清空本地幂等响应缓存，不改变业务数据'},
+  {method:'GET',path:'/api/__mock/expectations',description:'列出接口调用次数与状态码验收结果'},
+  {method:'POST',path:'/api/__mock/expectations',description:'添加最多 100 条当前 Schema 路由调用预期'},
+  {method:'DELETE',path:'/api/__mock/expectations',description:'清空全部接口调用预期'},
+  {method:'POST',path:'/api/__mock/expectations/reset',description:'保留调用预期并将实际计数清零'},
+  {method:'GET',path:'/api/__mock/expectations/verify',description:'汇总验收；未满足或超限时返回 409'},
+  {method:'DELETE',path:'/api/__mock/expectations/:id',description:'删除单条接口调用预期'},
 ] as const
 
 export function mockApiRoutes(project:ProjectSchema,options?:Partial<MockApiOptions>){
@@ -91,6 +97,7 @@ type StoredSnapshot = { summary: MockSnapshotSummary; database: MockDatabase }
 type SnapshotResult = { ok: true; snapshot: MockSnapshotSummary; replaced: boolean } | { ok: false; status: number; message: string }
 type ResolvedValue = { ok: true; value: unknown } | { ok: false; message: string }
 type CachedMockResponse = { status: number; statusText: string; headers: [string, string][]; body: string; bytes: number }
+type MockExpectation = { id: string; method: string; path: string; minCalls: number; maxCalls?: number; statuses?: number[]; calls: number; observedStatuses: Record<string, number> }
 
 const initialDb: MockDatabase = ${literal(initial)}
 export const db: MockDatabase = structuredClone(initialDb)
@@ -113,11 +120,14 @@ const TRANSACTION_LIMIT = 100
 const TRANSACTION_MAX_BYTES = 1024 * 1024
 const IDEMPOTENCY_LIMIT = 100
 const IDEMPOTENCY_MAX_BYTES = 10 * 1024 * 1024
+const EXPECTATION_LIMIT = 100
 const snapshotStore = new Map<string, StoredSnapshot>()
 let snapshotRevision = 0
 const idempotencyCache = new Map<string, { signature: string; response: CachedMockResponse }>()
 const idempotencyInFlight = new Map<string, { signature: string; promise: Promise<CachedMockResponse> }>()
 let idempotencyBytes = 0
+const mockExpectations: MockExpectation[] = []
+let expectationSequence = 0
 const sameId = (left: unknown, right: unknown) => String(left) === String(right)
 const pathMatches = (pattern: string, pathname: string) => {
   const expected = pattern.split('/'), actual = pathname.split('/')
@@ -126,6 +136,46 @@ const pathMatches = (pattern: string, pathname: string) => {
 const requestScenario = (request: Request) => {
   const pathname = new URL(request.url).pathname
   return mockApiOptions.routeOverrides.find(rule => rule.method === request.method && pathMatches(rule.path, pathname)) ?? mockApiOptions
+}
+const expectationRouteKeys = new Set([
+  ...resources.flatMap(resource => [
+    'GET /api/' + resource.resource,
+    'GET /api/' + resource.resource + '/:id',
+    'POST /api/' + resource.resource,
+    'PATCH /api/' + resource.resource + '/:id',
+    'DELETE /api/' + resource.resource + '/:id',
+    'POST /api/' + resource.resource + '/_batch',
+    'PATCH /api/' + resource.resource + '/_batch',
+    'DELETE /api/' + resource.resource + '/_batch',
+  ]),
+  ...(mockApiOptions.nestedRoutes ? relations.map(relation => 'GET ' + relation.path) : []),
+])
+const expectationView = (expectation: MockExpectation) => {
+  const invalidStatuses = Object.entries(expectation.observedStatuses).filter(([status]) => expectation.statuses && !expectation.statuses.includes(Number(status))).reduce((sum, [, count]) => sum + count, 0)
+  const outcome = invalidStatuses > 0 || expectation.maxCalls !== undefined && expectation.calls > expectation.maxCalls ? 'failed' : expectation.calls < expectation.minCalls ? 'pending' : 'passed'
+  return { ...structuredClone(expectation), invalidStatuses, outcome }
+}
+const recordExpectations = (method: string, pathname: string, status: number) => {
+  for (const expectation of mockExpectations) if (expectation.method === method && pathMatches(expectation.path, pathname)) {
+    expectation.calls += 1
+    expectation.observedStatuses[String(status)] = (expectation.observedStatuses[String(status)] ?? 0) + 1
+  }
+}
+const clearMockExpectations = () => { const cleared = mockExpectations.length; mockExpectations.length = 0; expectationSequence = 0; return cleared }
+const resetMockExpectationCounts = () => { for (const expectation of mockExpectations) { expectation.calls = 0; expectation.observedStatuses = {} }; return mockExpectations.length }
+const addMockExpectation = (input: unknown) => {
+  const body = asRecord(input)
+  if (!body || Object.keys(body).some(field => !['method', 'path', 'minCalls', 'maxCalls', 'statuses'].includes(field))) return { ok: false as const, status: 400, message: 'Expectation accepts method, path, minCalls, maxCalls and statuses only' }
+  if (mockExpectations.length >= EXPECTATION_LIMIT) return { ok: false as const, status: 409, message: 'Expectation limit is 100' }
+  const method = typeof body.method === 'string' ? body.method.toUpperCase() : '', path = typeof body.path === 'string' ? body.path : ''
+  if (!expectationRouteKeys.has(method + ' ' + path)) return { ok: false as const, status: 400, message: 'Expectation route is not part of the current Schema' }
+  const minCalls = body.minCalls === undefined ? 1 : body.minCalls, maxCalls = body.maxCalls
+  if (!Number.isInteger(minCalls) || Number(minCalls) < 0 || Number(minCalls) > 10_000 || maxCalls !== undefined && (!Number.isInteger(maxCalls) || Number(maxCalls) < Number(minCalls) || Number(maxCalls) > 10_000)) return { ok: false as const, status: 400, message: 'minCalls/maxCalls must be integers from 0 to 10000 and maxCalls must be at least minCalls' }
+  const statuses = body.statuses
+  if (statuses !== undefined && (!Array.isArray(statuses) || statuses.length === 0 || statuses.length > 20 || statuses.some(status => !Number.isInteger(status) || status < 100 || status > 599))) return { ok: false as const, status: 400, message: 'statuses must contain 1-20 HTTP status codes' }
+  const expectation: MockExpectation = { id: 'expectation-' + String(++expectationSequence).padStart(3, '0'), method, path, minCalls: Number(minCalls), ...(maxCalls === undefined ? {} : { maxCalls: Number(maxCalls) }), ...(statuses === undefined ? {} : { statuses: [...new Set(statuses as number[])] }), calls: 0, observedStatuses: {} }
+  mockExpectations.push(expectation)
+  return { ok: true as const, expectation: expectationView(expectation) }
 }
 const requestJson = async (request: Request) => {
   try {
@@ -430,7 +480,9 @@ const withNetwork = async (request: Request, resolve: () => Response | Promise<R
     response.headers.set('X-Mock-Latency', String(latency))
     if (injectedFailure) response.headers.set('X-Mock-Injected-Failure', 'true')
     if (routeOverride) response.headers.set('X-Mock-Route-Override', routeOverride)
-    requestLog.push({ id: requestId, sequence, method: request.method, path: new URL(request.url).pathname, status: response.status, latencyMs: latency, injectedFailure, idempotentReplay: response.headers.get('X-Mock-Idempotent-Replay') === 'true', ...(routeOverride ? { routeOverride } : {}) })
+    const pathname = new URL(request.url).pathname
+    recordExpectations(request.method, pathname, response.status)
+    requestLog.push({ id: requestId, sequence, method: request.method, path: pathname, status: response.status, latencyMs: latency, injectedFailure, idempotentReplay: response.headers.get('X-Mock-Idempotent-Replay') === 'true', ...(routeOverride ? { routeOverride } : {}) })
     if (requestLog.length > 500) requestLog.splice(0, requestLog.length - 500)
     return response
   }
@@ -449,6 +501,7 @@ export const resetMockData = () => {
   requestSequence = 0
   clearMockSnapshots()
   clearMockIdempotency()
+  clearMockExpectations()
 }
 
 export const handlers = resources.flatMap(resource => [
@@ -656,6 +709,7 @@ const databaseSummary = () => ({
   requests: requestLog.length,
   snapshots: snapshotStore.size,
   idempotency: idempotencyCache.size,
+  expectations: mockExpectations.length,
   rows: Object.fromEntries(resources.map(resource => [resource.resource, db[resource.resource].length])),
 })
 const controlHandlers = [
@@ -674,6 +728,26 @@ const controlHandlers = [
     return HttpResponse.json(wrapped({ cleared: true }))
   }),
   http.delete('*/api/__mock/idempotency', () => HttpResponse.json(wrapped({ cleared: clearMockIdempotency() }))),
+  http.get('*/api/__mock/expectations', () => {
+    const rows = mockExpectations.map(expectationView), passed = rows.filter(row => row.outcome === 'passed').length, failed = rows.filter(row => row.outcome === 'failed').length
+    return HttpResponse.json(wrapped(rows, { total: rows.length, passed, pending: rows.length - passed - failed, failed, limit: EXPECTATION_LIMIT }))
+  }),
+  http.post('*/api/__mock/expectations', async ({ request }) => {
+    const result = addMockExpectation(await requestJson(request))
+    return result.ok ? HttpResponse.json(wrapped(result.expectation), { status: 201 }) : errorResponse(result.status, result.message)
+  }),
+  http.delete('*/api/__mock/expectations', () => HttpResponse.json(wrapped({ cleared: clearMockExpectations() }))),
+  http.post('*/api/__mock/expectations/reset', () => HttpResponse.json(wrapped({ reset: resetMockExpectationCounts() }))),
+  http.get('*/api/__mock/expectations/verify', () => {
+    const rows = mockExpectations.map(expectationView), passed = rows.filter(row => row.outcome === 'passed').length, failed = rows.filter(row => row.outcome === 'failed').length, pending = rows.length - passed - failed, ok = failed === 0 && pending === 0
+    return HttpResponse.json(wrapped({ ok, total: rows.length, passed, pending, failed, expectations: rows }), { status: ok ? 200 : 409 })
+  }),
+  http.delete('*/api/__mock/expectations/:id', ({ params }) => {
+    const index = mockExpectations.findIndex(expectation => expectation.id === params.id)
+    if (index < 0) return errorResponse(404, 'Expectation not found')
+    const [deleted] = mockExpectations.splice(index, 1)
+    return HttpResponse.json(wrapped(expectationView(deleted)))
+  }),
   http.get('*/api/__mock/snapshots', () => {
     const rows = listMockSnapshots()
     return HttpResponse.json(wrapped(rows, { total: rows.length, limit: SNAPSHOT_LIMIT }))
@@ -854,8 +928,11 @@ ${routes.map(route=>`- \`GET ${route.list}?_page=1&_limit=20&_sort=-${route.prim
 - \`DELETE /api/__mock/snapshots/:name\`：删除单个快照；\`DELETE /api/__mock/snapshots\` 清空全部快照。
 - \`POST /api/__mock/transactions\`：原子执行最多 100 步跨表 JSON 动作，支持 \`create/update/delete\` 与 \`$alias.field\` 引用。
 - \`DELETE /api/__mock/idempotency\`：只清空本地幂等响应缓存，不改变业务数据和请求轨迹。
+- \`POST /api/__mock/expectations\`：声明业务接口的最少/最多调用次数和允许状态码，只接受当前 Schema 的路由。
+- \`GET /api/__mock/expectations/verify\`：全部满足返回 200；漏调、超调或状态码不符返回 409。
+- \`GET /api/__mock/expectations\`：查看逐条结果；\`POST .../reset\` 重置计数；DELETE 支持单删或全清。
 
-控制接口不经过延迟和失败注入，确保极端故障场景下仍能检查与复位；它们只存在于本地 MSW 内存环境，不是远程管理接口。事务只解释受限 JSON，不执行 JavaScript、不请求外部 URL，限制 100 步、1 MiB 和 10 层值嵌套；任一步失败恢复整个数据库。快照最多 10 个、每个最多 5 MiB，名称只允许 1–40 个中英文、数字、下划线或连字符；\`resetMockData()\` 会一并清除快照和幂等缓存，保证测试隔离。请求轨迹最多保留 500 条，仅记录序号、方法、pathname、状态、延迟、故障标记、幂等重放标记和命中规则；不会记录查询参数、请求体、Idempotency-Key、Authorization、Cookie 或其他 header。
+控制接口不经过延迟和失败注入，确保极端故障场景下仍能检查与复位；它们只存在于本地 MSW 内存环境，不是远程管理接口。事务只解释受限 JSON，不执行 JavaScript、不请求外部 URL，限制 100 步、1 MiB 和 10 层值嵌套；任一步失败恢复整个数据库。接口调用预期最多 100 条，方法和路径必须来自当前生成的业务路由，次数上限 10,000、允许状态码最多 20 个；只统计业务响应，不读取请求体。快照最多 10 个、每个最多 5 MiB，名称只允许 1–40 个中英文、数字、下划线或连字符；\`resetMockData()\` 会一并清除快照、幂等缓存和调用预期，保证测试隔离。请求轨迹最多保留 500 条，仅记录序号、方法、pathname、状态、延迟、故障标记、幂等重放标记和命中规则；不会记录查询参数、请求体、Idempotency-Key、Authorization、Cookie 或其他 header。
 
 ${nested.length?`### 父子嵌套查询\n\n${nested.map(route=>`- \`GET ${route.path}\`（${route.parent} → ${route.child}.${route.foreignKey}）`).join('\n')}\n`:''}
 
@@ -865,7 +942,7 @@ ${nested.length?`### 父子嵌套查询\n\n${nested.map(route=>`- \`GET ${route.
 
 - \`db.json\`：可直接读取或交给 json-server 等兼容工具。
 - \`package.json\` / \`tsconfig.json\` / \`vitest.config.ts\`：独立可运行的测试工程配置，依赖使用精确版本。
-- \`handlers.test.ts\`：真实请求验证分页、CRUD、ETag 乐观锁、幂等重试、批量回滚、跨表事务、脱敏追踪、场景快照、控制接口、复位与关系策略。
+- \`handlers.test.ts\`：真实请求验证分页、CRUD、接口调用预期、ETag 乐观锁、幂等重试、批量回滚、跨表事务、脱敏追踪、场景快照、控制接口、复位与关系策略。
 - \`config.ts\`：种子、延迟、失败率、失败状态码、响应格式与 Schema/关系校验开关。
 - \`handlers.ts\`：内存 CRUD、原子批量增改删、分页、搜索、字段筛选、排序与网络场景实现。
 - \`browser.ts\` / \`server.ts\`：浏览器和 Node 测试入口。
@@ -948,6 +1025,19 @@ describe(${JSON.stringify(project.name+' Mock API')}, () => {
     const stale = await fetch(url, { method: 'PATCH', headers: { 'content-type': 'application/json', 'If-Match': initialEtag }, body: JSON.stringify({ ${JSON.stringify(firstMutable.name)}: 'stale-value' }) })
     expect(stale.status).toBe(412); expect(stale.headers.get('ETag')).toBe(currentEtag)
     expect(db[${JSON.stringify(first.name)}][0][${JSON.stringify(firstMutable.name)}]).toBe('latest-value')
+  })
+
+  it('声明并验收接口调用次数和响应状态', async () => {
+    const created = await fetch(origin + '/api/__mock/expectations', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ method: 'GET', path: ${JSON.stringify(`/api/${first.name}/:id`)}, minCalls: 1, maxCalls: 1, statuses: [200] }) })
+    expect(created.status).toBe(201)
+    expect((await fetch(origin + '/api/__mock/expectations/verify')).status).toBe(409)
+    const row = db[${JSON.stringify(first.name)}][0], id = row[${JSON.stringify(firstPrimary.name)}]
+    expect((await fetch(origin + ${JSON.stringify(`/api/${first.name}/`)} + id)).status).toBe(200)
+    const passed = await fetch(origin + '/api/__mock/expectations/verify')
+    expect(passed.status).toBe(200)
+    expect(unwrap(await passed.json())).toMatchObject({ ok: true, passed: 1, pending: 0, failed: 0 })
+    expect((await fetch(origin + '/api/__mock/expectations/reset', { method: 'POST' })).status).toBe(200)
+    expect((await fetch(origin + '/api/__mock/expectations/verify')).status).toBe(409)
   })
 
   it('严格模式按 Schema 拒绝非法字段并返回定位信息', async () => {
