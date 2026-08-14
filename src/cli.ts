@@ -23,7 +23,7 @@ interface GenerateSummary {ok:boolean;dryRun:false;project:string;template:strin
 const needValue=(args:string[],index:number,flag:string)=>{const value=args[index+1];if(!value||value.startsWith('--'))throw new Error(`${flag} 需要一个值`);return value}
 const integer=(value:string,flag:string,min:number,max:number)=>{if(!/^\d+$/.test(value))throw new Error(`${flag} 必须是整数`);const parsed=Number(value);if(!Number.isSafeInteger(parsed)||parsed<min||parsed>max)throw new Error(`${flag} 必须在 ${min}–${max} 之间`);return parsed}
 const mockPatch=(options:CliOptions,patch:Partial<MockApiOptions>)=>{options.mockApi={...options.mockApi,...patch}}
-const mockRoute=(value:string)=>{const [method,path,latency,failureRate,failureStatus,...messageParts]=value.split('|'),normalizedMethod=method?.toUpperCase(),match=latency?.match(/^(\d+)(?::(\d+))?$/),validPath=path?.length<=200&&/^\/api\/[A-Za-z0-9_.:/-]+$/.test(path)&&!path.includes('..')&&!path.includes('//')&&!path.startsWith('/api/__mock/');if(!['GET','POST','PATCH','DELETE'].includes(normalizedMethod)||!validPath||!match||failureRate===undefined||failureStatus===undefined||!messageParts.join('|').trim())throw new Error('--mock-api-route 格式必须为 METHOD|/api/path|min:max|rate|status|message');const min=integer(match[1],'--mock-api-route',0,10_000),max=integer(match[2]??match[1],'--mock-api-route',0,10_000);if(max<min)throw new Error('--mock-api-route 最大延迟不能小于最小延迟');return{method:normalizedMethod,path,latencyMinMs:min,latencyMaxMs:max,failureRate:integer(failureRate,'--mock-api-route',0,100),failureStatus:integer(failureStatus,'--mock-api-route',400,599),failureMessage:messageParts.join('|')} as MockApiOptions['routeOverrides'][number]}
+const mockRoute=(value:string)=>{const [method,path,latency,failureRate,failureStatus,...messageParts]=value.split('|'),normalizedMethod=method?.toUpperCase(),match=latency?.match(/^(\d+)(?::(\d+))?$/),validPath=path?.length<=200&&/^\/api\/[A-Za-z0-9_.:/-]+$/.test(path)&&!path.includes('..')&&!path.includes('//')&&!path.startsWith('/api/__mock/');if(!['GET','POST','PUT','PATCH','DELETE'].includes(normalizedMethod)||!validPath||!match||failureRate===undefined||failureStatus===undefined||!messageParts.join('|').trim())throw new Error('--mock-api-route 格式必须为 METHOD|/api/path|min:max|rate|status|message');const min=integer(match[1],'--mock-api-route',0,10_000),max=integer(match[2]??match[1],'--mock-api-route',0,10_000);if(max<min)throw new Error('--mock-api-route 最大延迟不能小于最小延迟');return{method:normalizedMethod,path,latencyMinMs:min,latencyMaxMs:max,failureRate:integer(failureRate,'--mock-api-route',0,100),failureStatus:integer(failureStatus,'--mock-api-route',400,599),failureMessage:messageParts.join('|')} as MockApiOptions['routeOverrides'][number]}
 
 export function parseCliArgs(args:string[]):CliOptions {
   const options:CliOptions={template:'commerce',format:'bundle',force:false,dryRun:false,failOnQuality:false,json:false,listTemplates:false,help:false}
@@ -82,7 +82,7 @@ export const CLI_HELP=`Mock造数工具 CLI
   --mock-api-envelope <shape>   plain / data / data-meta
   --mock-api-strict-schema      按 Schema 严格校验类型、必填、枚举、范围和长度
   --mock-api-delete <policy>    restrict / cascade，默认阻止删除有子记录的父记录
-  --mock-api-no-fk-check        不校验 POST/PATCH 外键完整性
+  --mock-api-no-fk-check        不校验 POST/PUT/PATCH 外键完整性
   --mock-api-no-nested          不生成父子嵌套查询路由
   --mock-api-route <rule>       单路由覆盖，可重复；METHOD|path|min:max|rate|status|message
   --output <file>       输出 ZIP 路径；默认当前目录下的安全文件名

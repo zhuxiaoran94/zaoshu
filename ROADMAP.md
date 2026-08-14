@@ -98,6 +98,9 @@
 - [x] `_expand` 一层父表关联展开、缺失父记录安全返回 null
 - [x] 50 字段/5 关系/1 层深度资源上限与非法关系拒绝
 - [x] 响应形态绑定游标、完整记录 ETag、OpenAPI 扩展与独立 HTTP 自测
+- [x] Mock API 单条 PUT 完整替换与 PATCH 部分修改的严格语义区分
+- [x] PUT 必填字段、URL 主键、唯一字段、外键与 If-Match 统一保护
+- [x] PUT 路由场景 UI/CLI、调用预期、请求追踪、OpenAPI 与独立 HTTP 自测
 
 ## 近期版本
 

@@ -38,7 +38,7 @@ export function mockApiRoutes(project:ProjectSchema,options?:Partial<MockApiOpti
     list:`/api/${table.name}`,
     detail:`/api/${table.name}/:id`,
     batch:`/api/${table.name}/_batch`,
-    methods:['GET','POST','PATCH','DELETE'],
+    methods:['GET','POST','PUT','PATCH','DELETE'],
     batchMethods:['POST','PATCH','DELETE'],
     filters:table.fields.map(field=>field.name),
     behavior,
@@ -61,7 +61,7 @@ export function mockApiConfig(project:ProjectSchema,options?:Partial<MockApiOpti
   deletePolicy: 'restrict' | 'cascade'
   nestedRoutes: boolean
   routeOverrides: Array<{
-    method: 'GET' | 'POST' | 'PATCH' | 'DELETE'
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
     path: string
     latencyMinMs: number
     latencyMaxMs: number
@@ -142,6 +142,7 @@ const expectationRouteKeys = new Set([
   ...resources.flatMap(resource => [
     'GET /api/' + resource.resource,
     'GET /api/' + resource.resource + '/:id',
+    'PUT /api/' + resource.resource + '/:id',
     'POST /api/' + resource.resource,
     'PATCH /api/' + resource.resource + '/:id',
     'DELETE /api/' + resource.resource + '/:id',
@@ -397,6 +398,11 @@ const validateBody = (body: MockRecord, resource: ResourceDefinition, partial: b
   }
   return null
 }
+const validateReplacementBody = (body: MockRecord, resource: ResourceDefinition): ValidationIssue | null => {
+  const missing = resource.validation.find(field => field.required && body[field.name] === undefined)
+  if (missing) return { field: missing.name, rule: 'required', message: 'Required field missing: ' + missing.name }
+  return validateBody(body, resource, false)
+}
 
 const invalidReference = (body: MockRecord, resource: ResourceDefinition) => {
   if (!mockApiOptions.validateForeignKeys) return null
@@ -601,6 +607,24 @@ export const handlers = resources.flatMap(resource => [
     const result = insertRecord(input, resource)
     return result.ok ? etagResponse(result.row, 201) : errorResponse(result.status, result.message, result.details)
   }))),
+  http.put('*/api/' + resource.resource + '/:id', ({ params, request }) => withNetwork(request, async () => {
+    const index = db[resource.resource].findIndex(item => sameId(item[resource.key], params.id))
+    const input = await jsonBody(request)
+    if (index < 0) return errorResponse(404, 'Not found')
+    if (!input) return errorResponse(400, 'JSON object required')
+    const current = db[resource.resource][index], precondition = ifMatchError(request.headers.get('If-Match') ?? undefined, current)
+    if (precondition) return precondition
+    if (Object.prototype.hasOwnProperty.call(input, resource.key) && !sameId(input[resource.key], current[resource.key])) return errorResponse(422, 'Primary key cannot be changed', { field: resource.key, rule: 'immutable' })
+    const issue = validateReplacementBody(input, resource)
+    if (issue) return errorResponse(422, issue.message, issue)
+    const candidate = { ...allowedBody(input, resource), [resource.key]: current[resource.key] }
+    const duplicate = duplicateUniqueField(candidate, resource, current)
+    if (duplicate) return errorResponse(409, 'Unique field already exists: ' + duplicate, { field: duplicate, rule: 'unique' })
+    const invalid = invalidReference(candidate, resource)
+    if (invalid) return errorResponse(422, 'Foreign key not found: ' + invalid.childField + ' -> ' + invalid.parent + '.' + invalid.parentField)
+    db[resource.resource][index] = candidate
+    return etagResponse(candidate)
+  })),
   http.patch('*/api/' + resource.resource + '/:id', ({ params, request }) => withNetwork(request, async () => {
     const index = db[resource.resource].findIndex(item => sameId(item[resource.key], params.id))
     const input = await jsonBody(request)
@@ -930,7 +954,7 @@ npm run typecheck
 npm test
 \`\`\`
 
-包内测试会真实启动 MSW Node server，验证分页、CRUD、ETag 乐观锁、原子批量增改删、跨表事务、控制接口、复位、外键、删除策略和嵌套路由。
+包内测试会真实启动 MSW Node server，验证分页、CRUD、PUT 完整替换、ETag 乐观锁、原子批量增改删、跨表事务、控制接口、复位、外键、删除策略和嵌套路由。
 
 ## 接入已有项目
 
@@ -965,6 +989,7 @@ ${routes.map(route=>`- \`GET ${route.list}?_page=1&_limit=20&_sort=-${route.prim
 - \`GET ${route.list}?price__gte=100&status__in=成功,失败&name__contains=耳机\`
 - \`GET ${route.detail}\`
 - \`POST ${route.list}\`
+- \`PUT ${route.detail}\`（完整替换；可发送 \`If-Match\`）
 - \`POST ${route.batch}\`（1–1,000 条，失败整批回滚）
 - \`PATCH ${route.batch}\`（\`[{ id, changes, ifMatch? }]\`，失败整批回滚）
 - \`DELETE ${route.batch}\`（ID 数组、\`{ ids: [] }\` 或 \`{ items: [{ id, ifMatch }] }\`）
@@ -991,7 +1016,7 @@ ${routes.map(route=>`- \`GET ${route.list}?_page=1&_limit=20&_sort=-${route.prim
 
 ${nested.length?`### 父子嵌套查询\n\n${nested.map(route=>`- \`GET ${route.path}\`（${route.parent} → ${route.child}.${route.foreignKey}）`).join('\n')}\n`:''}
 
-列表同时支持原页码分页和游标分页：传 \`_cursor=start\` 获取第一页，后续传 \`X-Next-Cursor\`；游标绑定资源、筛选、排序、响应形态和当前进程随机密钥，篡改、跨查询复用或与 \`_page\` 混用返回 400。排序相同值会自动追加主键消歧，翻页期间新增更早记录不会导致已有记录重复。游标模式在 meta 返回 \`nextCursor/hasMore/limit/total\`。字段筛选支持 \`eq/ne/gt/gte/lt/lte/contains/starts/ends/in/isnull\`，多个参数按 AND 组合；\`_sort=-price,name\` 可按最多 5 个字段排序。列表和单条 GET 可用 \`_fields=id,status\` 裁剪响应；有父表外键的资源可用 \`_expand=userId\` 在 \`userId_expanded\` 返回一层父记录。裁剪最多 50 个字段、展开最多 5 个外键且不会递归；未知字段或非外键展开返回 400。ETag 始终基于完整底层记录，不因返回字段变化而改变。为避免恶意查询拖慢本地页面，每次最多 50 个参数，名称最多 120 字符、普通值最多 1,000 字符、游标最多 4,200 字符、\`in\` 最多 50 项，超过时返回 400。列表响应包含 \`X-Total-Count\`，业务响应包含稳定请求编号 \`X-Mock-Request-Id\` 和实际等待毫秒数 \`X-Mock-Latency\`，注入失败额外包含 \`X-Mock-Injected-Failure: true\`；单页最多 1,000 条。单条 GET/POST/PATCH/DELETE 返回基于当前记录内容的强 \`ETag\`；GET 可发送 \`If-None-Match\` 获得 304，PATCH/DELETE 可发送 \`If-Match\`，过期时返回 412 与最新 ETag，避免旧页面覆盖新数据。批量修改/删除可在每项携带 \`ifMatch\`，跨表事务的 update/delete 动作也支持它，任一过期会回滚全部前序变更。单条 POST、批量 POST 和跨表事务可发送 1–80 位 \`Idempotency-Key\`：同键、同方法、同路径和同请求体会原样重放且只写入一次，响应带 \`X-Mock-Idempotent-Replay: true\`；同键异参返回 409。缓存限制为最近 100 项和 10 MiB，请求签名输入限制 1 MiB；故障注入发生在幂等处理之前，因此模拟网络失败不会缓存，客户端可以按真实习惯重试。POST 自动补充缺失主键，主键或 Schema 中标记为 unique 的字段重复时返回 409 与 \`field/rule=unique\`。严格 Schema 校验关闭时，未知字段被兼容性丢弃；开启后，未知字段、类型、必填、空值、枚举、范围、长度和 PATCH 主键修改均返回 422，并附带 \`field\` 与 \`rule\`。开启外键校验时，POST/PATCH 的悬空外键返回 422。批量新增接受 JSON 数组或 \`{ items: [] }\`；单批最多 1,000 条。任一条格式、Schema、唯一、主键、外键、ETag 或引用策略失败都会整批不落库，并在错误中返回从 0 开始的 \`index\`。级联批量删除会在 \`meta.cascaded\` 返回额外清理的后代数量。
+列表同时支持原页码分页和游标分页：传 \`_cursor=start\` 获取第一页，后续传 \`X-Next-Cursor\`；游标绑定资源、筛选、排序、响应形态和当前进程随机密钥，篡改、跨查询复用或与 \`_page\` 混用返回 400。排序相同值会自动追加主键消歧，翻页期间新增更早记录不会导致已有记录重复。游标模式在 meta 返回 \`nextCursor/hasMore/limit/total\`。字段筛选支持 \`eq/ne/gt/gte/lt/lte/contains/starts/ends/in/isnull\`，多个参数按 AND 组合；\`_sort=-price,name\` 可按最多 5 个字段排序。列表和单条 GET 可用 \`_fields=id,status\` 裁剪响应；有父表外键的资源可用 \`_expand=userId\` 在 \`userId_expanded\` 返回一层父记录。裁剪最多 50 个字段、展开最多 5 个外键且不会递归；未知字段或非外键展开返回 400。ETag 始终基于完整底层记录，不因返回字段变化而改变。为避免恶意查询拖慢本地页面，每次最多 50 个参数，名称最多 120 字符、普通值最多 1,000 字符、游标最多 4,200 字符、\`in\` 最多 50 项，超过时返回 400。列表响应包含 \`X-Total-Count\`，业务响应包含稳定请求编号 \`X-Mock-Request-Id\` 和实际等待毫秒数 \`X-Mock-Latency\`，注入失败额外包含 \`X-Mock-Injected-Failure: true\`；单页最多 1,000 条。单条 GET/POST/PUT/PATCH/DELETE 返回基于当前记录内容的强 \`ETag\`；GET 可发送 \`If-None-Match\` 获得 304，PUT/PATCH/DELETE 可发送 \`If-Match\`，过期时返回 412 与最新 ETag，避免旧页面覆盖新数据。PUT 是真正的完整替换：URL 中的主键保持不变，未提交的可选字段会删除，全部必填字段始终要提供；PATCH 只合并请求中出现的字段。批量修改/删除可在每项携带 \`ifMatch\`，跨表事务的 update/delete 动作也支持它，任一过期会回滚全部前序变更。单条 POST、批量 POST 和跨表事务可发送 1–80 位 \`Idempotency-Key\`：同键、同方法、同路径和同请求体会原样重放且只写入一次，响应带 \`X-Mock-Idempotent-Replay: true\`；同键异参返回 409。缓存限制为最近 100 项和 10 MiB，请求签名输入限制 1 MiB；故障注入发生在幂等处理之前，因此模拟网络失败不会缓存，客户端可以按真实习惯重试。POST 自动补充缺失主键，主键或 Schema 中标记为 unique 的字段重复时返回 409 与 \`field/rule=unique\`。严格 Schema 校验关闭时，未知字段被兼容性丢弃；开启后，未知字段、类型、必填、空值、枚举、范围、长度和 PUT/PATCH 主键修改均返回 422，并附带 \`field\` 与 \`rule\`。开启外键校验时，POST/PUT/PATCH 的悬空外键返回 422。批量新增接受 JSON 数组或 \`{ items: [] }\`；单批最多 1,000 条。任一条格式、Schema、唯一、主键、外键、ETag 或引用策略失败都会整批不落库，并在错误中返回从 0 开始的 \`index\`。级联批量删除会在 \`meta.cascaded\` 返回额外清理的后代数量。
 
 ## 文件
 
@@ -1008,6 +1033,7 @@ ${nested.length?`### 父子嵌套查询\n\n${nested.map(route=>`- \`GET ${route.
 
 export function mockApiSmokeTests(project:ProjectSchema){
   const first=project.tables[0],firstPrimary=primary(first),firstMutable=first.fields.find(field=>field.name!==firstPrimary.name)??firstPrimary,relations=relationSpecs(project),relation=relations[0]
+  const firstRequired=first.fields.find(field=>field.name!==firstPrimary.name&&(field.missing??0)===0&&(field.nullable??0)===0&&!field.condition)??firstMutable
   const firstUniqueFields=first.fields.filter(field=>field.unique&&field.name!==firstPrimary.name).map(field=>field.name)
   const relationParent=relation?project.tables.find(table=>table.name===relation.parent):undefined,relationChild=relation?project.tables.find(table=>table.name===relation.child):undefined
   const [nestedBefore,nestedAfter]=relation?.path.split(':id')??['','']
@@ -1109,6 +1135,20 @@ describe(${JSON.stringify(project.name+' Mock API')}, () => {
     const stale = await fetch(url, { method: 'PATCH', headers: { 'content-type': 'application/json', 'If-Match': initialEtag }, body: JSON.stringify({ ${JSON.stringify(firstMutable.name)}: 'stale-value' }) })
     expect(stale.status).toBe(412); expect(stale.headers.get('ETag')).toBe(currentEtag)
     expect(db[${JSON.stringify(first.name)}][0][${JSON.stringify(firstMutable.name)}]).toBe('latest-value')
+  })
+
+  it('PUT 完整替换记录并执行必填与 ETag 保护', async () => {
+    const row = db[${JSON.stringify(first.name)}][0], id = row[${JSON.stringify(firstPrimary.name)}], url = origin + ${JSON.stringify(`/api/${first.name}/`)} + id
+    row.__legacy = 'must-disappear'
+    const current = await fetch(url), etag = current.headers.get('ETag')!, replacement = structuredClone(row)
+    delete replacement[${JSON.stringify(firstPrimary.name)}]; delete replacement.__legacy
+    const replaced = await fetch(url, { method: 'PUT', headers: { 'content-type': 'application/json', 'If-Match': etag }, body: JSON.stringify(replacement) })
+    expect(replaced.status).toBe(200)
+    const body = unwrap(await replaced.json()) as Record<string, unknown>
+    expect(body[${JSON.stringify(firstPrimary.name)}]).toBe(id); expect(body.__legacy).toBeUndefined()
+    const missingRequired = structuredClone(replacement); delete missingRequired[${JSON.stringify(firstRequired.name)}]
+    expect((await fetch(url, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(missingRequired) })).status).toBe(422)
+    expect((await fetch(url, { method: 'PUT', headers: { 'content-type': 'application/json', 'If-Match': etag }, body: JSON.stringify(replacement) })).status).toBe(412)
   })
 
   it('声明并验收接口调用次数和响应状态', async () => {
@@ -1263,7 +1303,7 @@ describe(${JSON.stringify(project.name+' Mock API')}, () => {
     const rule = configuredRouteOverrides[0]
     if (!rule) return
     mockApiOptions.routeOverrides = [{ ...rule, latencyMinMs: 0, latencyMaxMs: 0, failureRate: 100 }]
-    const path = rule.path.replace(':id', '__smoke__'), init = ['POST', 'PATCH'].includes(rule.method)
+    const path = rule.path.replace(':id', '__smoke__'), init = ['POST', 'PUT', 'PATCH'].includes(rule.method)
       ? { method: rule.method, headers: { 'content-type': 'application/json' }, body: '{}' }
       : { method: rule.method }
     const response = await fetch(origin + path, init)
