@@ -104,6 +104,9 @@
 - [x] Mock API 页码/游标列表集合 ETag 与 If-None-Match 条件轮询
 - [x] 集合 ETag 绑定完整底层页、响应裁剪、展开父记录、总数和游标元数据
 - [x] 列表 304 保留分页响应头、512 字符上限、OpenAPI 与独立 HTTP 自测
+- [x] 页码模式 RFC 8288 风格 first/prev/next/last 相对 Link 响应头
+- [x] 游标模式签名 next Link、查询参数保留与请求 Origin 隔离
+- [x] 200/304 Link OpenAPI 契约及独立 HTTP 续读测试
 
 ## 近期版本
 
