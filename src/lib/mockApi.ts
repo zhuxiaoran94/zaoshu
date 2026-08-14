@@ -109,7 +109,7 @@ const relations = [
 ${relationDefinitions}
 ] as const
 const resourceByName = new Map(resources.map(resource => [resource.resource, resource]))
-const controlParams = new Set(['q', '_page', '_limit', '_sort', '_order', '_cursor'])
+const controlParams = new Set(['q', '_page', '_limit', '_sort', '_order', '_cursor', '_fields', '_expand'])
 const filterOperators = new Set(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'starts', 'ends', 'in', 'isnull'])
 const requestCounts = new Map<string, number>()
 export const requestLog: MockRequestLog[] = []
@@ -214,6 +214,24 @@ const cursorQueryFingerprint = (url: URL) => {
   url.searchParams.forEach((value, key) => { if (!['_cursor', '_page', '_limit'].includes(key)) entries.push(encodeURIComponent(key) + '=' + encodeURIComponent(value)) })
   return textFingerprint(entries.sort().join('&'))
 }
+const responseShape = (url: URL, resource: ResourceDefinition) => {
+  const fieldInput = url.searchParams.get('_fields'), expandInput = url.searchParams.get('_expand'), fields = fieldInput ? fieldInput.split(',').map(field => field.trim()).filter(Boolean) : [], expands = expandInput ? expandInput.split(',').map(field => field.trim()).filter(Boolean) : []
+  if (fields.length > 50) return { ok: false as const, response: errorResponse(400, '_fields accepts at most 50 fields') }
+  if (expands.length > 5) return { ok: false as const, response: errorResponse(400, '_expand accepts at most 5 foreign keys') }
+  if (fields.some(field => !resource.fields.includes(field))) return { ok: false as const, response: errorResponse(400, '_fields contains unknown field') }
+  if (expands.some(field => !relations.some(relation => relation.child === resource.resource && relation.childField === field))) return { ok: false as const, response: errorResponse(400, '_expand contains a field that is not an enabled foreign key') }
+  return { ok: true as const, fields: [...new Set(fields)], expands: [...new Set(expands)] }
+}
+const shapeRecord = (row: MockRecord, resource: ResourceDefinition, fields: string[], expands: string[]) => {
+  const shaped = fields.length ? Object.fromEntries(fields.map(field => [field, structuredClone(row[field])])) : structuredClone(row)
+  for (const field of expands) {
+    const relation = relations.find(candidate => candidate.child === resource.resource && candidate.childField === field)
+    if (!relation) continue
+    const parent = db[relation.parent].find(candidate => sameId(candidate[relation.parentField], row[field]))
+    shaped[field + '_expanded'] = parent ? structuredClone(parent) : null
+  }
+  return shaped
+}
 const filterRows = (rows: MockRecord[], url: URL, resource: ResourceDefinition): FilterResult => {
   const entries: [string, string][] = []
   url.searchParams.forEach((value, key) => entries.push([key, value]))
@@ -282,14 +300,16 @@ const ifMatchError = (value: unknown, row: MockRecord, details?: MockRecord) => 
   if (candidates.includes('*') || candidates.includes(currentEtag)) return null
   return preconditionResponse(row, details)
 }
-const readWithEtag = (request: Request, row: MockRecord) => {
+const readWithEtag = (request: Request, row: MockRecord, resource: ResourceDefinition) => {
+  const shape = responseShape(new URL(request.url), resource)
+  if (!shape.ok) return shape.response
   const etag = rowEtag(row), value = request.headers.get('If-None-Match')
   if (value !== null) {
     if (value.length > 512) return errorResponse(400, 'If-None-Match must be under 512 characters')
     const candidates = value.split(',').map(candidate => candidate.trim().replace(/^W\\//, ''))
     if (candidates.includes('*') || candidates.includes(etag)) return new Response(null, { status: 304, headers: { ETag: etag } })
   }
-  return etagResponse(row)
+  return HttpResponse.json(wrapped(shapeRecord(row, resource, shape.fields, shape.expands)), { headers: { ETag: etag } })
 }
 
 const responseFromCache = (response: CachedMockResponse) => {
@@ -529,6 +549,8 @@ export const resetMockData = () => {
 export const handlers = resources.flatMap(resource => [
   http.get('*/api/' + resource.resource, ({ request }) => withNetwork(request, () => {
     const url = new URL(request.url)
+    const shape = responseShape(url, resource)
+    if (!shape.ok) return shape.response
     const query = (url.searchParams.get('q') ?? '').toLocaleLowerCase()
     let rows = [...db[resource.resource]]
     const filtered = filterRows(rows, url, resource)
@@ -562,8 +584,8 @@ export const handlers = resources.flatMap(resource => [
       if (!cursor || cursor.version !== 1 || cursor.resource !== resource.resource || cursor.query !== queryFingerprint || cursor.sort !== sortKey || !Array.isArray(cursor.values) || cursor.values.length !== sorts.length) return errorResponse(400, 'Cursor is invalid, expired or belongs to a different query')
       rows = rows.filter(row => compareTuple(row, cursor.values as unknown[]) > 0)
     }
-    const page = Math.max(1, Number(url.searchParams.get('_page')) || 1), start = cursorRequested ? 0 : (page - 1) * limit, pageRows = rows.slice(start, start + limit), hasMore = rows.length > start + limit
-    const nextCursor = cursorRequested && hasMore && pageRows.length ? encodeCursor({ version: 1, resource: resource.resource, query: cursorQueryFingerprint(url), sort: sorts.join(','), values: sorts.map(sort => pageRows.at(-1)![sort.replace(/^-/, '')]) }) : null
+    const page = Math.max(1, Number(url.searchParams.get('_page')) || 1), start = cursorRequested ? 0 : (page - 1) * limit, rawPageRows = rows.slice(start, start + limit), hasMore = rows.length > start + limit
+    const nextCursor = cursorRequested && hasMore && rawPageRows.length ? encodeCursor({ version: 1, resource: resource.resource, query: cursorQueryFingerprint(url), sort: sorts.join(','), values: sorts.map(sort => rawPageRows.at(-1)![sort.replace(/^-/, '')]) }) : null, pageRows = rawPageRows.map(row => shapeRecord(row, resource, shape.fields, shape.expands))
     return HttpResponse.json(
       wrapped(pageRows, { ...(cursorRequested ? { nextCursor, hasMore } : { page }), limit, total }),
       { headers: { 'X-Total-Count': String(total), ...(nextCursor ? { 'X-Next-Cursor': nextCursor } : {}) } },
@@ -571,7 +593,7 @@ export const handlers = resources.flatMap(resource => [
   })),
   http.get('*/api/' + resource.resource + '/:id', ({ params, request }) => withNetwork(request, () => {
     const row = db[resource.resource].find(item => sameId(item[resource.key], params.id))
-    return row ? readWithEtag(request, row) : errorResponse(404, 'Not found')
+    return row ? readWithEtag(request, row, resource) : errorResponse(404, 'Not found')
   })),
   http.post('*/api/' + resource.resource, ({ request }) => withNetwork(request, () => withIdempotency(request, async () => {
     const input = await jsonBody(request)
@@ -938,6 +960,7 @@ afterAll(() => server.close())
 
 ${routes.map(route=>`- \`GET ${route.list}?_page=1&_limit=20&_sort=-${route.primaryKey}&q=关键字\`
 - \`GET ${route.list}?_cursor=start&_limit=20&_sort=-${route.primaryKey}\`（后续传响应头 \`X-Next-Cursor\`）
+- \`GET ${route.list}?_fields=${route.filters.slice(0,2).join(',')}\`（只返回指定字段）
 - \`GET ${route.list}?字段名=精确值\`
 - \`GET ${route.list}?price__gte=100&status__in=成功,失败&name__contains=耳机\`
 - \`GET ${route.detail}\`
@@ -968,7 +991,7 @@ ${routes.map(route=>`- \`GET ${route.list}?_page=1&_limit=20&_sort=-${route.prim
 
 ${nested.length?`### 父子嵌套查询\n\n${nested.map(route=>`- \`GET ${route.path}\`（${route.parent} → ${route.child}.${route.foreignKey}）`).join('\n')}\n`:''}
 
-列表同时支持原页码分页和游标分页：传 \`_cursor=start\` 获取第一页，后续传 \`X-Next-Cursor\`；游标绑定资源、筛选、排序和当前进程随机密钥，篡改、跨查询复用或与 \`_page\` 混用返回 400。排序相同值会自动追加主键消歧，翻页期间新增更早记录不会导致已有记录重复。游标模式在 meta 返回 \`nextCursor/hasMore/limit/total\`。字段筛选支持 \`eq/ne/gt/gte/lt/lte/contains/starts/ends/in/isnull\`，多个参数按 AND 组合；\`_sort=-price,name\` 可按最多 5 个字段排序。为避免恶意查询拖慢本地页面，每次最多 50 个参数，名称最多 120 字符、普通值最多 1,000 字符、游标最多 4,200 字符、\`in\` 最多 50 项，超过时返回 400。列表响应包含 \`X-Total-Count\`，业务响应包含稳定请求编号 \`X-Mock-Request-Id\` 和实际等待毫秒数 \`X-Mock-Latency\`，注入失败额外包含 \`X-Mock-Injected-Failure: true\`；单页最多 1,000 条。单条 GET/POST/PATCH/DELETE 返回基于当前记录内容的强 \`ETag\`；GET 可发送 \`If-None-Match\` 获得 304，PATCH/DELETE 可发送 \`If-Match\`，过期时返回 412 与最新 ETag，避免旧页面覆盖新数据。批量修改/删除可在每项携带 \`ifMatch\`，跨表事务的 update/delete 动作也支持它，任一过期会回滚全部前序变更。单条 POST、批量 POST 和跨表事务可发送 1–80 位 \`Idempotency-Key\`：同键、同方法、同路径和同请求体会原样重放且只写入一次，响应带 \`X-Mock-Idempotent-Replay: true\`；同键异参返回 409。缓存限制为最近 100 项和 10 MiB，请求签名输入限制 1 MiB；故障注入发生在幂等处理之前，因此模拟网络失败不会缓存，客户端可以按真实习惯重试。POST 自动补充缺失主键，主键或 Schema 中标记为 unique 的字段重复时返回 409 与 \`field/rule=unique\`。严格 Schema 校验关闭时，未知字段被兼容性丢弃；开启后，未知字段、类型、必填、空值、枚举、范围、长度和 PATCH 主键修改均返回 422，并附带 \`field\` 与 \`rule\`。开启外键校验时，POST/PATCH 的悬空外键返回 422。批量新增接受 JSON 数组或 \`{ items: [] }\`；单批最多 1,000 条。任一条格式、Schema、唯一、主键、外键、ETag 或引用策略失败都会整批不落库，并在错误中返回从 0 开始的 \`index\`。级联批量删除会在 \`meta.cascaded\` 返回额外清理的后代数量。
+列表同时支持原页码分页和游标分页：传 \`_cursor=start\` 获取第一页，后续传 \`X-Next-Cursor\`；游标绑定资源、筛选、排序、响应形态和当前进程随机密钥，篡改、跨查询复用或与 \`_page\` 混用返回 400。排序相同值会自动追加主键消歧，翻页期间新增更早记录不会导致已有记录重复。游标模式在 meta 返回 \`nextCursor/hasMore/limit/total\`。字段筛选支持 \`eq/ne/gt/gte/lt/lte/contains/starts/ends/in/isnull\`，多个参数按 AND 组合；\`_sort=-price,name\` 可按最多 5 个字段排序。列表和单条 GET 可用 \`_fields=id,status\` 裁剪响应；有父表外键的资源可用 \`_expand=userId\` 在 \`userId_expanded\` 返回一层父记录。裁剪最多 50 个字段、展开最多 5 个外键且不会递归；未知字段或非外键展开返回 400。ETag 始终基于完整底层记录，不因返回字段变化而改变。为避免恶意查询拖慢本地页面，每次最多 50 个参数，名称最多 120 字符、普通值最多 1,000 字符、游标最多 4,200 字符、\`in\` 最多 50 项，超过时返回 400。列表响应包含 \`X-Total-Count\`，业务响应包含稳定请求编号 \`X-Mock-Request-Id\` 和实际等待毫秒数 \`X-Mock-Latency\`，注入失败额外包含 \`X-Mock-Injected-Failure: true\`；单页最多 1,000 条。单条 GET/POST/PATCH/DELETE 返回基于当前记录内容的强 \`ETag\`；GET 可发送 \`If-None-Match\` 获得 304，PATCH/DELETE 可发送 \`If-Match\`，过期时返回 412 与最新 ETag，避免旧页面覆盖新数据。批量修改/删除可在每项携带 \`ifMatch\`，跨表事务的 update/delete 动作也支持它，任一过期会回滚全部前序变更。单条 POST、批量 POST 和跨表事务可发送 1–80 位 \`Idempotency-Key\`：同键、同方法、同路径和同请求体会原样重放且只写入一次，响应带 \`X-Mock-Idempotent-Replay: true\`；同键异参返回 409。缓存限制为最近 100 项和 10 MiB，请求签名输入限制 1 MiB；故障注入发生在幂等处理之前，因此模拟网络失败不会缓存，客户端可以按真实习惯重试。POST 自动补充缺失主键，主键或 Schema 中标记为 unique 的字段重复时返回 409 与 \`field/rule=unique\`。严格 Schema 校验关闭时，未知字段被兼容性丢弃；开启后，未知字段、类型、必填、空值、枚举、范围、长度和 PATCH 主键修改均返回 422，并附带 \`field\` 与 \`rule\`。开启外键校验时，POST/PATCH 的悬空外键返回 422。批量新增接受 JSON 数组或 \`{ items: [] }\`；单批最多 1,000 条。任一条格式、Schema、唯一、主键、外键、ETag 或引用策略失败都会整批不落库，并在错误中返回从 0 开始的 \`index\`。级联批量删除会在 \`meta.cascaded\` 返回额外清理的后代数量。
 
 ## 文件
 
@@ -976,7 +999,7 @@ ${nested.length?`### 父子嵌套查询\n\n${nested.map(route=>`- \`GET ${route.
 - \`package.json\` / \`tsconfig.json\` / \`vitest.config.ts\`：独立可运行的测试工程配置，依赖使用精确版本。
 - \`handlers.test.ts\`：真实请求验证分页、CRUD、接口调用预期、ETag 乐观锁、幂等重试、批量回滚、跨表事务、脱敏追踪、场景快照、控制接口、复位与关系策略。
 - \`config.ts\`：种子、延迟、失败率、失败状态码、响应格式与 Schema/关系校验开关。
-- \`handlers.ts\`：内存 CRUD、原子批量增改删、分页、搜索、字段筛选、排序与网络场景实现。
+- \`handlers.ts\`：内存 CRUD、原子批量增改删、分页、搜索、字段筛选、响应裁剪、关联展开、排序与网络场景实现。
 - \`browser.ts\` / \`server.ts\`：浏览器和 Node 测试入口。
 - \`openapi.json\`：接口契约，可导入 Apifox、Postman 或 Swagger UI。
 - \`routes.json\`：机器可读路由与网络行为清单。
@@ -1019,7 +1042,24 @@ describe(${JSON.stringify(project.name+' Mock API')}, () => {
     const tampered = cursor.slice(0, -1) + (cursor.endsWith('0') ? '1' : '0')
     expect((await fetch(origin + ${JSON.stringify(`/api/${first.name}?_cursor=`)} + tampered + ${JSON.stringify(`&_limit=1&_sort=${firstPrimary.name}`)})).status).toBe(400)
     expect((await fetch(origin + ${JSON.stringify(`/api/${first.name}?_cursor=`)} + encodeURIComponent(cursor) + ${JSON.stringify(`&_limit=1&_sort=${firstPrimary.name}&q=different`)})).status).toBe(400)
-  })
+  })${relation?`
+
+  it('裁剪响应字段并展开一层父记录', async () => {
+    const child = db[${JSON.stringify(relation.child)}][0]
+    const parent = db[${JSON.stringify(relation.parent)}].find(row => String(row[${JSON.stringify(relation.parentField)}]) === String(child[${JSON.stringify(relation.foreignKey)}]))
+    const query = ${JSON.stringify(`?_limit=1&_fields=${primary(relationChild!).name},${relation.foreignKey}&_expand=${relation.foreignKey}`)}
+    const list = await fetch(origin + ${JSON.stringify(`/api/${relation.child}`)} + query)
+    expect(list.status).toBe(200)
+    const rows = unwrap(await list.json()) as Record<string, unknown>[]
+    expect(Object.keys(rows[0]).sort()).toEqual(${JSON.stringify([primary(relationChild!).name,relation.foreignKey,`${relation.foreignKey}_expanded`].sort())})
+    expect(rows[0][${JSON.stringify(`${relation.foreignKey}_expanded`)}]).toEqual(parent)
+    expect((rows[0][${JSON.stringify(`${relation.foreignKey}_expanded`)}] as Record<string, unknown>)[${JSON.stringify(`${relation.foreignKey}_expanded`)}]).toBeUndefined()
+    const detail = await fetch(origin + ${JSON.stringify(`/api/${relation.child}/`)} + child[${JSON.stringify(primary(relationChild!).name)}] + ${JSON.stringify(`?_fields=${primary(relationChild!).name}&_expand=${relation.foreignKey}`)})
+    expect(detail.status).toBe(200)
+    expect(Object.keys(unwrap(await detail.json()) as Record<string, unknown>).sort()).toEqual(${JSON.stringify([primary(relationChild!).name,`${relation.foreignKey}_expanded`].sort())})
+    expect((await fetch(origin + ${JSON.stringify(`/api/${relation.child}?_fields=__missing__`)})).status).toBe(400)
+    expect((await fetch(origin + ${JSON.stringify(`/api/${relation.child}?_expand=${primary(relationChild!).name}`)})).status).toBe(400)
+  })`:''}
 
   it('组合高级筛选、多字段排序并拒绝过量查询', async () => {
     const table = ${JSON.stringify(first.name)}, rows = db[table]
