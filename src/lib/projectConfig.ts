@@ -128,7 +128,7 @@ export function parseProjectFile(raw: string): ProjectSchema {
   try { parsed = JSON.parse(raw) } catch { throw new Error('不是有效的 JSON 配置文件') }
   if (!parsed || typeof parsed !== 'object') throw new Error('配置文件结构无效')
   const candidate = parsed as Partial<ProjectFile>
-  if (candidate.fileType !== 'mock-data-project' || candidate.fileVersion !== 1) throw new Error('不是 Mock造数工具支持的项目文件')
+  if (candidate.fileType !== 'mock-data-project' || candidate.fileVersion !== 1) throw new Error('不是竹小冉mock造数支持的项目文件')
   const result = projectSchema.safeParse(candidate.project)
   if (!result.success) {
     const first = result.error.issues[0]

@@ -62,7 +62,7 @@ export function parseCliArgs(args:string[]):CliOptions {
   return options
 }
 
-export const CLI_HELP=`Mock造数工具 CLI
+export const CLI_HELP=`竹小冉mock造数 CLI
 
 用法：
   npm run mock -- --template commerce --seed 42 --format bundle

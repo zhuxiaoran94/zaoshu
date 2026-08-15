@@ -1,6 +1,6 @@
 {
-  "name": "Mock造数工具",
-  "short_name": "Mock造数",
+  "name": "竹小冉mock造数",
+  "short_name": "竹小冉mock",
   "description": "完全在浏览器本地运行的测试数据生成、异常注入和多格式导出工作台。",
   "lang": "zh-CN",
   "start_url": "/",

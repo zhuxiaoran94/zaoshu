@@ -950,7 +950,7 @@ export function mockApiReadme(project:ProjectSchema,options?:Partial<MockApiOpti
   const nested=routes.flatMap(route=>route.nested)
   return`# ${project.name} Mock API
 
-此包由 Mock造数工具生成。数据已固定为 seed ${project.seed}、时间基准 ${project.referenceDate??'2026-08-14T00:00:00.000Z'}，不需要连接服务器或数据库。它只在使用者自己的浏览器或测试进程内运行，不会在 Mock造数工具公共站点创建可写接口。
+此包由竹小冉mock造数生成。数据已固定为 seed ${project.seed}、时间基准 ${project.referenceDate??'2026-08-14T00:00:00.000Z'}，不需要连接服务器或数据库。它只在使用者自己的浏览器或测试进程内运行，不会在竹小冉mock造数公共站点创建可写接口。
 
 ## 当前网络场景
 

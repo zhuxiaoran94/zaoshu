@@ -98,7 +98,7 @@ describe('Mock造数引擎',()=>{
   it('项目配置可以安全导出与恢复',()=>{
     const project=cloneTemplate('commerce')
     expect(parseProjectFile(serializeProject(project))).toEqual(project)
-    expect(()=>parseProjectFile(JSON.stringify({fileType:'other',fileVersion:1,project}))).toThrow(/不是 Mock造数工具/)
+    expect(()=>parseProjectFile(JSON.stringify({fileType:'other',fileVersion:1,project}))).toThrow(/不是竹小冉mock造数/)
   })
   it('拒绝危险或过大的项目配置',()=>{
     const project=cloneTemplate('users')

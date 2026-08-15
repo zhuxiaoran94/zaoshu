@@ -10,7 +10,7 @@ export default function Header({onExport,onProject,onSchemaImport,onCommand}:{on
   const referenceDate=(project.referenceDate??'2026-08-14T00:00:00.000Z').slice(0,10),setReferenceDate=(value:string)=>{if(value)updateProject({referenceDate:`${value}T00:00:00.000Z`})}
   return <>
     <header className="topbar">
-      <div className="brand"><span className="brand-mark"><FlaskConical size={20}/></span><div><strong>Mock造数工具</strong><span>TEST DATA WORKBENCH</span></div></div>
+      <div className="brand"><span className="brand-mark"><FlaskConical size={20}/></span><div><strong>竹小冉mock造数</strong><span>TEST DATA WORKBENCH</span></div></div>
       <div className="project-name"><label>当前项目</label><input value={project.name} onChange={e=>updateProject({name:e.target.value})}/></div>
       <div className="top-actions"><button className="button ghost command-button" onClick={onCommand} aria-keyshortcuts="Meta+K Control+K"><Command size={16}/>命令<kbd>⌘K</kbd></button><button className="button ghost schema-import-button" onClick={onSchemaImport}><Upload size={16}/>Schema</button><button className="button ghost project-button" onClick={onProject}><FolderCog size={16}/>项目</button><button className="button ghost export-button" onClick={onExport}><Download size={16}/>导出</button>{isGenerating?<button className="button cancel" onClick={cancelGenerate}><X size={16}/>取消生成</button>:<button className="button primary" onClick={run} aria-keyshortcuts="Meta+Enter Control+Enter"><Play size={16} fill="currentColor"/>{project.mode==='pairwise'?'打开组合实验室':'生成数据'}</button>}</div>
     </header>
