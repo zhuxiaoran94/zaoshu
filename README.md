@@ -2,7 +2,7 @@
 
 面向测试人员的浏览器端测试数据工作台。内置 120+ 字段生成类型和用户、电商、金融、游戏、社区、物流、测试通用七类场景，无需上传任何数据即可生成多表关联测试数据。
 
-当前版本：**6.5.0 标准分页链接版**。网站没有匿名写入接口，访客的数据与配置仅保存在各自浏览器中。
+当前版本：**6.5.1 Cloudflare 部署修复版**。网站没有匿名写入接口，访客的数据与配置仅保存在各自浏览器中。
 
 ## 功能
 
@@ -313,17 +313,21 @@ npm run mock -- --template commerce --format mock-api \
 
 导出 ZIP 已包含独立工程的精确依赖；解压后运行 `npm install` 即可。浏览器入口调用 `startMockApi()`，Node/Vitest 使用导出的 `server`；详细路由与接入代码在包内 `mock-api/README.md`。
 
-## Cloudflare Pages
+## Cloudflare Workers 静态资源 / Pages
 
 - 构建命令：`npm run build`
 - 输出目录：`dist`
+- Workers 部署命令：`npx wrangler deploy`
 - Node.js：18 或更高版本
+- SPA 回退：由 `wrangler.jsonc` 的 `assets.not_found_handling = "single-page-application"` 处理
+
+项目不再发布 `/* /index.html 200` 的 `_redirects` 规则；该旧规则会在 Workers 静态资源部署中被识别为对 `/index.html` 的无限循环。Cloudflare Pages 使用构建命令和输出目录即可，Workers Builds 则直接读取仓库根目录的 `wrangler.jsonc`。
 
 项目没有服务端接口，所有造数、检查与导出均在浏览器本地完成。
 
 ### 为什么公开部署不容易被别人搞坏
 
-- 站点是 Cloudflare Pages 静态文件，没有数据库和公共写入 API。
+- 站点只发布 Cloudflare 静态资源，没有数据库和公共写入 API。
 - “Mock API”是下载到使用者项目中的本地拦截代码，不在 Cloudflare 站点托管可写数据。
 - 用户配置、业务字典和生成结果均不上传，访客之间互不影响。
 - 分享链接只携带 Schema 与种子并使用 URL fragment；它不是加密或访问控制，持有链接的人可以查看规则并编辑自己的副本。
@@ -332,7 +336,7 @@ npm run mock -- --template commerce --format mock-api \
 - CSP、禁止 iframe 嵌入、权限策略和跨源资源策略由 `_headers` 下发。
 - Service Worker 仅处理同源 GET 静态资源，不缓存第三方响应或任何写请求。
 - 大任务进入 Web Worker，单项目总生成量限制为 200,000 条，可主动取消。
-- 生产依赖的高危漏洞由 CI 阻断；Cloudflare 安全响应头与 SPA 回退规则在每次构建中自动检查。
+- 生产依赖的高危漏洞由 CI 阻断；Cloudflare 安全响应头与 Wrangler SPA 回退配置在每次构建中自动检查。
 
 公开仓库不能阻止别人阅读或复制前端源码，但访客不能通过网站修改仓库、部署文件或其他用户的数据。
 

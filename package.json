@@ -1,7 +1,7 @@
 {
   "name": "mock-data-studio",
   "private": true,
-  "version": "6.5.0",
+  "version": "6.5.1",
   "license": "MIT",
   "type": "module",
   "scripts": {
