@@ -2,7 +2,7 @@
 
 面向测试人员的浏览器端测试数据工作台。内置 120+ 字段生成类型和用户、电商、金融、游戏、社区、物流、测试通用七类场景，无需上传任何数据即可生成多表关联测试数据。
 
-当前版本：**6.5.2 Cloudflare 构建兼容版**。网站没有匿名写入接口，访客的数据与配置仅保存在各自浏览器中。
+当前版本：**6.5.3 Cloudflare 缓存兼容版**。网站没有匿名写入接口，访客的数据与配置仅保存在各自浏览器中。
 
 ## 功能
 
@@ -320,6 +320,8 @@ npm run mock -- --template commerce --format mock-api \
 - Workers 部署命令：`npx wrangler deploy`
 - Node.js：22 或更高版本（Cloudflare 当前构建环境可直接使用 Node 24）
 - SPA 回退：由 `wrangler.jsonc` 的 `assets.not_found_handling = "single-page-application"` 处理
+
+生产构建使用 `tsc -b --force`，会忽略 Cloudflare 恢复的旧 TypeScript 增量状态并重新检查全部源码，避免跨 Node.js/TypeScript 环境的缓存产生伪类型错误。
 
 项目不再发布 `/* /index.html 200` 的 `_redirects` 规则；该旧规则会在 Workers 静态资源部署中被识别为对 `/index.html` 的无限循环。Cloudflare Pages 使用构建命令和输出目录即可，Workers Builds 则直接读取仓库根目录的 `wrangler.jsonc`。
 
