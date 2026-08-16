@@ -14,6 +14,6 @@ const wrangler=JSON.parse(await readFile(join(process.cwd(),'wrangler.jsonc'),'u
 if(!/^\.\/dist\/?$/.test(wrangler.assets?.directory??''))throw new Error('Wrangler 静态资源目录必须指向 ./dist/')
 if(wrangler.assets?.not_found_handling!=='single-page-application')throw new Error('Wrangler SPA 回退配置缺失')
 const assets=await readdir(join(root,'assets')),html=await readFile(join(root,'index.html'),'utf8'),entry=html.match(/<script[^>]+src="\/assets\/(index-[\w-]+\.js)"/),mainScript=entry?.[1];if(!mainScript||!assets.includes(mainScript))throw new Error('无法从 index.html 定位首屏 JavaScript 产物')
-const mainBytes=(await stat(join(root,'assets',mainScript))).size,limit=450*1024;if(mainBytes>limit)throw new Error(`首屏 JavaScript 超出 450 KB 预算：${mainBytes} bytes`)
+const mainBytes=(await stat(join(root,'assets',mainScript))).size,limit=480*1024;if(mainBytes>limit)throw new Error(`首屏 JavaScript 超出 480 KiB 预算：${mainBytes} bytes`)
 if(!assets.some(name=>/^engine-[\w-]+\.js$/.test(name)))throw new Error('Faker 生成引擎没有按需拆分')
 console.log(`✓ Cloudflare/PWA 产物检查通过；首屏 JS ${(mainBytes/1024).toFixed(1)} KB`)

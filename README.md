@@ -2,7 +2,7 @@
 
 面向测试人员的浏览器端测试数据工作台。内置 120+ 字段生成类型和用户、电商、金融、游戏、社区、物流、测试通用七类场景，无需上传任何数据即可生成多表关联测试数据。
 
-当前版本：**6.5.1 Cloudflare 部署修复版**。网站没有匿名写入接口，访客的数据与配置仅保存在各自浏览器中。
+当前版本：**6.5.2 Cloudflare 构建兼容版**。网站没有匿名写入接口，访客的数据与配置仅保存在各自浏览器中。
 
 ## 功能
 
@@ -39,7 +39,7 @@
 - 每次导出均为 ZIP，内附 Manifest、SHA-256、种子、Schema 版本和异常比例
 - 完整交付包一次包含全量 JSON、逐表 CSV、三种 SQL 与覆盖报告
 - Faker 生成引擎和 Web Worker 按需加载；XLSX 使用内部只写实现，不引入有已知高危漏洞的工作簿解析器
-- 构建内置 450 KB 首屏 JS 性能预算，超出即阻止版本发布
+- 构建内置 480 KiB 首屏 JS 性能预算，超出即阻止版本发布
 - 支持 MySQL、PostgreSQL、SQLite `CREATE TABLE` DDL 导入，推断列、主键、唯一约束和外键
 - DDL 仅作文本结构解析，忽略 DROP/INSERT 等语句，不连接或执行数据库操作
 - 真实分布模式支持均匀、正态、长尾、热点、递增和递减六种可复现分布
@@ -142,7 +142,7 @@
 - 所有响应记录 `X-Mock-Latency`，注入失败额外记录 `X-Mock-Injected-Failure`，方便断言与问题定位
 - `config.ts`、`routes.json`、OpenAPI 3.1 与 Manifest 保存同一份网络行为，交付后仍可追溯本次 Mock 条件
 - OpenAPI 响应模型跟随原始 JSON、`{ data }` 或 `{ data, meta }` 选择变化，并声明分页元信息、失败响应和 Mock 响应头
-- 网络场景面板与生成逻辑按需加载，首屏仍保持在 450 KB 发布预算内
+- 网络场景面板与生成逻辑按需加载，首屏仍保持在 480 KiB 发布预算内
 - Mock API 写入可按 Schema 自动校验外键，POST/PUT/PATCH 使用不存在的父记录时返回 422，避免联调数据静默失真
 - 父记录删除默认采用安全的 restrict 策略，有子记录时返回 409；需要清理整条业务链时可显式选择递归 cascade
 - 每条外键自动生成 `GET /api/父表/:id/子表` 嵌套查询；同一父子表存在多个外键时使用 `by-字段名` 生成无冲突路径
@@ -318,7 +318,7 @@ npm run mock -- --template commerce --format mock-api \
 - 构建命令：`npm run build`
 - 输出目录：`dist`
 - Workers 部署命令：`npx wrangler deploy`
-- Node.js：18 或更高版本
+- Node.js：22 或更高版本（Cloudflare 当前构建环境可直接使用 Node 24）
 - SPA 回退：由 `wrangler.jsonc` 的 `assets.not_found_handling = "single-page-application"` 处理
 
 项目不再发布 `/* /index.html 200` 的 `_redirects` 规则；该旧规则会在 Workers 静态资源部署中被识别为对 `/index.html` 的无限循环。Cloudflare Pages 使用构建命令和输出目录即可，Workers Builds 则直接读取仓库根目录的 `wrangler.jsonc`。
